@@ -31,9 +31,7 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # 화면을 넉넉하게 설정 (요소 가림 방지)
     chrome_options.add_argument("--window-size=1920,1080")
-    # 봇 탐지 회피용 헤더
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
@@ -41,19 +39,16 @@ def get_driver():
     return driver
 
 def get_detail_info(item_seq):
-    """상세 페이지 정보 (requests 사용 - 속도 향상)"""
+    """상세 페이지 정보 (requests 사용)"""
     detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
     try:
-        # 상세 페이지는 보안이 덜 까다로운 편이라 requests로 빠르게 시도
         res = requests.get(detail_url, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. 위탁제조업체
         manufacturer = ""
         mf_tag = soup.find('th', string=lambda t: t and ('위탁' in t or '수탁' in t))
         if mf_tag: manufacturer = mf_tag.find_next('td').get_text(strip=True)
 
-        # 2. 성분명 (최대 5개)
         ingredients = []
         ing_table = soup.select('div#scroll_02 table tbody tr')
         for tr in ing_table:
@@ -61,7 +56,6 @@ def get_detail_info(item_seq):
             if len(tds) > 1: ingredients.append(tds[1].get_text(strip=True))
         ingredients_str = ", ".join(ingredients[:5])
 
-        # 3. 효능효과
         efficacy = ""
         eff_div = soup.select_one('div#scroll_03')
         if eff_div: efficacy = eff_div.get_text(strip=True)[:300] 
@@ -71,7 +65,7 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (숫자 8자리 입력 모드) ===")
+    print("=== 크롤링 시작 (클릭 강화 + 숫자 8자리 입력) ===")
     
     driver = get_driver()
     wait = WebDriverWait(driver, 20)
@@ -81,54 +75,52 @@ def main():
     print(f">> 사이트 접속 중: {base_url}")
     driver.get(base_url)
     
-    # [핵심] 하이픈(-)을 뺀 순수 숫자 8자리 포맷 (YYYYMMDD)
-    # 사이트가 자동으로 변환해주므로 숫자가 깔끔합니다.
+    # 숫자 8자리 포맷 (YYYYMMDD)
     today = datetime.now()
     two_weeks_ago = today - timedelta(days=14)
-    str_start = two_weeks_ago.strftime("%Y%m%d") # 예: 20260201
-    str_end = today.strftime("%Y%m%d")           # 예: 20260215
+    str_start = two_weeks_ago.strftime("%Y%m%d")
+    str_end = today.strftime("%Y%m%d")
 
     try:
         print(">> '일자검색' 모드 전환 시도...")
         
-        # [1] '일자검색' 라벨을 찾아서 클릭
-        # 화면상의 모든 라벨 중 '일자'라는 단어가 포함된 것을 찾습니다.
-        labels = driver.find_elements(By.TAG_NAME, "label")
-        clicked = False
-        for label in labels:
-            if "일자" in label.text:
-                driver.execute_script("arguments[0].click();", label)
-                clicked = True
-                print(">> '일자검색' 버튼 클릭 성공")
-                break
+        # [1] '일자검색' 라벨을 XPath로 정확하게 찾아서 클릭 (가장 확실한 방법)
+        try:
+            # 텍스트가 '일자검색'인 라벨 찾기
+            date_label = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(), '일자검색')]")))
+            date_label.click()
+            print(">> '일자검색' 라벨 클릭 완료 (방법 1)")
+        except:
+            # 실패 시 라디오 버튼(input)을 직접 찾아서 클릭 시도
+            print(">> 라벨 클릭 실패, 라디오 버튼 직접 클릭 시도...")
+            radio_btn = driver.find_element(By.CSS_SELECTOR, "input[value='date']") # value가 date인 경우가 많음
+            driver.execute_script("arguments[0].click();", radio_btn)
+            print(">> '일자검색' 라디오 버튼 강제 클릭 완료 (방법 2)")
         
-        if not clicked:
-            print("⚠️ '일자검색' 버튼을 찾지 못했습니다. (기본 설정으로 진행)")
-
-        # [2] 입력칸이 눈에 보일 때까지 대기 (Null 에러 방지)
-        print(">> 입력칸 생성 대기 중...")
+        # [2] 입력칸이 나타날 때까지 확실히 대기
+        print(">> 입력칸 활성화 대기 중...")
         start_input = wait.until(EC.visibility_of_element_located((By.ID, "startDate")))
         end_input = wait.until(EC.visibility_of_element_located((By.ID, "endDate")))
         
-        # [3] 숫자만 입력 (send_keys)
+        # [3] 기존 값 지우고 숫자만 입력
+        start_input.click() # 포커스 주기
         start_input.clear()
-        start_input.send_keys(str_start)
+        start_input.send_keys(str_start) # 예: 20260201
         
+        end_input.click()
         end_input.clear()
-        end_input.send_keys(str_end)
+        end_input.send_keys(str_end) # 예: 20260215
         
-        print(f">> 날짜 입력 완료 (숫자만): {str_start} ~ {str_end}")
+        print(f">> 날짜 입력 완료: {str_start} ~ {str_end}")
         
-        # [4] 엔터키로 검색 실행
+        # [4] 검색 실행 (엔터키)
         end_input.send_keys(Keys.RETURN)
         print(">> 검색 실행 (Enter)")
         
-        # 결과 로딩 대기 (넉넉하게 5초)
-        time.sleep(5)
+        time.sleep(5) # 결과 로딩 대기
         
     except Exception as e:
-        print(f"⚠️ 검색 설정 과정 중 오류: {e}")
-        # 오류가 나도 죽지 않고 진행 (혹시 데이터가 이미 나와있을 수도 있으니)
+        print(f"⚠️ 검색 설정 중 오류 (진행 불가 시 현재 화면 캡쳐 추천): {e}")
 
     # 2. 데이터 수집
     page_source = driver.page_source
@@ -149,13 +141,11 @@ def main():
         if len(cols) < 5: continue
 
         try:
-            # 취소일자 확인 (5번째 칸, 인덱스 4)
             cancel_date = cols[4].get_text(strip=True)
             product_name = cols[1].get_text(strip=True)
         except:
             continue
 
-        # 취소된 약은 수집 제외
         if cancel_date:
             print(f"SKIP (취소됨): {product_name}")
             continue
@@ -164,12 +154,9 @@ def main():
             company = cols[2].get_text(strip=True)
             approval_date = cols[3].get_text(strip=True)
             
-            # 상세 링크에서 고유번호(itemSeq) 추출
             onclick_text = cols[1].find('a')['onclick']
-            # view('2023001', '...') 형태
             item_seq = onclick_text.split("'")[1]
             
-            # 중복 체크 (DB에 이미 있으면 패스)
             exists = supabase.table("drug_approvals").select("item_seq").eq("item_seq", item_seq).execute()
             if exists.data:
                 print(f"SKIP (이미 있음): {product_name}")
@@ -177,7 +164,6 @@ def main():
 
             print(f" + 수집 중: {product_name}")
             
-            # 상세 정보 가져오기
             manufacturer, ingredients, efficacy = get_detail_info(item_seq)
 
             data = {
@@ -189,18 +175,4 @@ def main():
                 "ingredients": ingredients,
                 "efficacy": efficacy,
                 "approval_date": approval_date,
-                "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-            }
-            
-            supabase.table("drug_approvals").upsert(data).execute()
-            saved_count += 1
-            
-        except Exception as e:
-            print(f"에러: {e}")
-            continue
-    
-    driver.quit()
-    print(f"\n=== 최종 완료: {saved_count}건 신규 저장됨 ===")
-
-if __name__ == "__main__":
-    main()
+                "detail_url": f"https://
