@@ -32,7 +32,7 @@ def get_detail_info(item_seq):
         return None
 
 def main():
-    print("=== 🌙 션 팀장님 굿나잇: '2026 코드' 무중단 전수조사 시작 ===")
+    print("=== 🌟 션 팀장님 전략: '2026 트리거' 스마트 탐색 가동 ===")
     
     list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
     
@@ -44,18 +44,27 @@ def main():
         last_page = math.ceil(total_count / 100)
         print(f">> 총 {total_count}건. 마지막 {last_page}페이지부터 역순으로 훑습니다.")
     except:
+        print("❌ API 접속 실패")
         return
 
     target_saved = 0
+    
+    # 상태 변수들
+    found_2026_trigger = False  # 2026년을 한번이라도 찾았는지?
+    consecutive_old_count = 0   # 연속으로 옛날 데이터가 나온 횟수
 
-    # [2단계] 마지막 페이지부터 역순으로 '20페이지' 무조건 스캔 (조기종료 없음)
-    # 20페이지 = 2000개 데이터. 이 안에 2026년 데이터는 100% 들어있습니다.
-    scan_range = 20 
-    start_page = last_page
-    end_page = max(1, last_page - scan_range)
+    # [2단계] 역순 스캔 (마지막 페이지 -> 1페이지)
+    # 넉넉하게 뒤에서부터 30페이지를 봅니다 (하지만 트리거 로직으로 조기 종료 가능)
+    for page in range(last_page, last_page - 30, -1):
+        if page < 1: break
+        
+        # 종료 조건: 2026년을 찾은 후에, 옛날 데이터만 200개 연속으로 나오면 "진짜 끝"으로 간주
+        if found_2026_trigger and consecutive_old_count >= 200:
+            print(f"\n>> 🛑 [종료] 2026년 데이터 확보 후, 2025년 데이터가 {consecutive_old_count}건 연속 발견됨.")
+            print(">> 더 이상의 최신 데이터는 없다고 판단하여 퇴근합니다.")
+            break
 
-    for page in range(start_page, end_page - 1, -1):
-        print(f"\n>> [스캔] {page}페이지 분석 중... (멈추지 않습니다)")
+        print(f"\n>> [스캔] {page}페이지 분석 중... (연속 구형 데이터: {consecutive_old_count}건)")
         
         try:
             params = {'serviceKey': API_KEY, 'pageNo': str(page), 'numOfRows': '100', 'type': 'xml'}
@@ -70,12 +79,15 @@ def main():
                 code = item.findtext('PRDLST_STDR_CODE') or item.findtext('ITEM_SEQ') or ""
                 year_prefix = code[:4]
                 
-                # '2026'으로 시작하면 무조건 상세 조회 (놓치지 않기 위해)
+                # [상황 A] 2026년 데이터 발견!
                 if year_prefix == "2026":
+                    found_2026_trigger = True  # 트리거 발동! (이제부터 집중)
+                    consecutive_old_count = 0  # 옛날 데이터 카운트 리셋 (섞여있을 수 있으므로)
+                    
                     item_seq = item.findtext('ITEM_SEQ')
                     product_name = item.findtext('ITEM_NAME')
                     
-                    # 상세 API로 날짜 검증
+                    # 상세 API로 정밀 검증
                     detail = get_detail_info(item_seq)
                     if not detail or not detail['date']: continue
                     
@@ -83,7 +95,7 @@ def main():
                     
                     # 🎯 타겟: 2월 1일 ~ 2월 14일
                     if "20260201" <= real_date <= "20260214":
-                        print(f"   -> [🎯보물발견] {product_name} ({real_date})")
+                        print(f"   -> [🎯보물확보] {product_name} ({real_date})")
                         
                         data = {
                             "item_seq": item_seq,
@@ -94,20 +106,3 @@ def main():
                             "approval_type": item.findtext('PRDUCT_TYPE_NAME') or "정상",
                             "ingredients": detail['ingr'],
                             "efficacy": detail['effi'],
-                            "approval_date": real_date,
-                            "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-                        }
-                        supabase.table("drug_approvals").upsert(data).execute()
-                        target_saved += 1
-                        time.sleep(0.05)
-                
-                # 2025년 데이터가 나와도 멈추지 않고 계속 갑니다! (혹시 섞여 있을까봐)
-
-        except Exception as e:
-            print(f"⚠️ 페이지 에러: {e}")
-            continue
-
-    print(f"\n=== 🏆 굿나잇 리포트: 총 {target_saved}건 저장 완료! 좋은 꿈 꾸세요! ===")
-
-if __name__ == "__main__":
-    main()
