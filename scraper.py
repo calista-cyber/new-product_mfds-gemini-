@@ -15,11 +15,11 @@ if not URL or not KEY:
 
 supabase: Client = create_client(URL, KEY)
 
-def get_detail_info(item_seq):
-    """상세 페이지에서 위탁제조업체, 성분, 효능효과 추출"""
+def get_detail_info(session, item_seq):
+    """상세 페이지 정보 추출 (세션 사용)"""
     detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
     try:
-        res = requests.get(detail_url, headers={'User-Agent': 'Mozilla/5.0'})
+        res = session.get(detail_url, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
         # 위탁제조업체
@@ -50,41 +50,66 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (페이지 순회 모드) ===")
+    print("=== 크롤링 시작 (세션 모드) ===")
     
-    url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
+    base_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
     
-    # 오늘 날짜와 7일 전 날짜 계산
+    # [핵심] 세션 객체 생성 (방문증 보관함)
+    s = requests.Session()
+    
+    # 진짜 사람처럼 보이기 위한 헤더
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01',
+        'Origin': 'https://nedrug.mfds.go.kr',
+        'Host': 'nedrug.mfds.go.kr'
+    }
+
+    # 1. 먼저 사이트에 한번 접속해서 쿠키(방문증) 획득
+    try:
+        print(">> 사이트 접속 시도 (쿠키 획득)...")
+        s.get(base_url, headers=headers, timeout=10)
+    except Exception as e:
+        print(f"초기 접속 실패: {e}")
+        return
+
+    # 날짜 계산 (오늘 ~ 10일 전까지 넉넉하게)
     today = datetime.now()
-    week_ago = today - timedelta(days=7) # 일주일치 데이터 검색
+    week_ago = today - timedelta(days=10)
     
     current_page = 1
     total_saved = 0
     
     while True:
-        print(f"\n>> [ {current_page} 페이지 ] 읽는 중...")
+        print(f"\n>> [ {current_page} 페이지 ] 읽는 중... ({week_ago.strftime('%Y-%m-%d')} ~ {today.strftime('%Y-%m-%d')})")
         
-        # 페이지 번호(page)를 포함하여 요청
+        # 검색 조건 (Payload)
         payload = {
             "searchYn": "true",
-            "page": current_page, 
+            "page": current_page,
+            "searchType": "", # 전체 검색
             "startDate": week_ago.strftime("%Y-%m-%d"),
             "endDate": today.strftime("%Y-%m-%d"),
+            "order": "date" # 최신순 정렬
         }
         
         try:
-            res = requests.post(url, data=payload, headers={'User-Agent': 'Mozilla/5.0'})
+            # [핵심] 그냥 requests.post가 아니라 s.post 사용 (쿠키 포함됨)
+            res = s.post(base_url, data=payload, headers=headers, timeout=10)
             soup = BeautifulSoup(res.text, 'html.parser')
         except Exception as e:
-            print(f"페이지 접속 실패: {e}")
+            print(f"페이지 로딩 실패: {e}")
             break
 
-        # 테이블 행 가져오기
         rows = soup.select('table.board_list tbody tr')
         
-        # [종료 조건] 데이터가 없거나, "데이터가 없습니다" 텍스트가 나오면 종료
+        # 결과가 없으면 종료
         if not rows or (len(rows) == 1 and "데이터가" in rows[0].get_text()):
-            print("더 이상 데이터가 없습니다. 크롤링을 종료합니다.")
+            print("더 이상 데이터가 없습니다. (또는 검색 결과 없음)")
+            # [디버깅] 만약 1페이지부터 데이터가 없으면 사이트 응답 내용을 일부 출력해봄
+            if current_page == 1:
+                print(">>> 사이트 응답 내용 일부(디버깅):")
+                print(soup.get_text(strip=True)[:200])
             break
 
         page_saved_count = 0
@@ -94,20 +119,23 @@ def main():
             if not cols or len(cols) < 5:
                 continue
 
-            # 취소/취하 일자 확인 (인덱스 6)
-            cancel_date = cols[6].get_text(strip=True) if len(cols) > 6 else ""
+            # [수정 완료] 취소/취하일자는 5번째 칸 (인덱스 4)
+            # 0:순번, 1:제품명, 2:업체명, 3:허가일자, 4:취소일자, 5:전문/일반
+            cancel_date = cols[4].get_text(strip=True) 
             product_name = cols[1].get_text(strip=True)
 
+            # 취소 날짜가 있으면 건너뛰기
             if cancel_date:
                 print(f"SKIP (취소됨): {product_name}")
                 continue
 
             try:
-                # 데이터 추출
                 company = cols[2].get_text(strip=True)
                 approval_date = cols[3].get_text(strip=True)
                 
+                # 상세 링크 추출
                 onclick = cols[1].find('a')['onclick'] 
+                # view('20230001', '...') 형태 파싱
                 item_seq = onclick.split("'")[1]
                 detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
 
@@ -119,7 +147,8 @@ def main():
 
                 print(f" + 수집: {product_name}")
                 
-                manufacturer, ingredients, efficacy = get_detail_info(item_seq)
+                # 상세 정보도 세션(s)을 이용해서 가져옴
+                manufacturer, ingredients, efficacy = get_detail_info(s, item_seq)
 
                 data = {
                     "item_seq": item_seq,
@@ -138,19 +167,16 @@ def main():
                 page_saved_count += 1
                 total_saved += 1
                 
-                # 서버 부하 방지를 위해 아주 살짝 대기
                 time.sleep(0.1)
 
             except Exception as e:
                 print(f"에러 발생 ({product_name}): {e}")
                 continue
         
-        # 이번 페이지에서 저장한 게 없고 모두 중복/취소라면? (그래도 다음 페이지 확인 필요)
         print(f"   -> {current_page}페이지 완료 ({page_saved_count}건 저장)")
         
-        # 다음 페이지로 이동
         current_page += 1
-        time.sleep(0.5) # 페이지 넘길 때 대기
+        time.sleep(0.5)
 
     print(f"\n=== 최종 완료: 총 {total_saved}건 신규 저장됨 ===")
 
