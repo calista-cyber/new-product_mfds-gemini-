@@ -12,16 +12,20 @@ URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
-def get_detail_and_date(item_seq):
-    """ [상세 API] 날짜 및 상세 정보 조회 """
+def get_detail_info(item_seq):
+    """
+    [상세 API] 진짜 허가일자 및 상세정보 조회
+    """
     url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {'serviceKey': API_KEY, 'item_seq': item_seq, 'numOfRows': '1', 'type': 'xml'}
+    
     try:
         res = requests.get(url, params=params, timeout=10)
         root = ET.fromstring(res.text)
         item = root.find('.//item')
+        
         if not item: return None
-
+        
         return {
             'date': item.findtext('ITEM_PERMIT_DATE') or item.findtext('PERMIT_DATE'),
             'manu': item.findtext('MANU_METHOD') or "정보없음",
@@ -31,17 +35,32 @@ def get_detail_and_date(item_seq):
     except:
         return None
 
-def scan_range(start_page, end_page, list_url):
-    """ 지정된 페이지 범위를 스캔하여 저장 (저장된 개수 반환) """
-    saved_count = 0
-    # start부터 end까지 (순방향 또는 역방향)
-    step = 1 if start_page <= end_page else -1
+def main():
+    print("=== 🌟 션 팀장님 힌트 적용: '2026 코드' 초고속 타격 작전 ===")
     
-    # range의 끝은 포함되지 않으므로 조정
-    for page in range(start_page, end_page + step, step):
-        if page < 1: continue
+    list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
+    
+    # [1단계] 마지막 페이지 찾기 (최신 데이터 위치)
+    print(">> [정찰] 데이터 끝 페이지 계산 중...")
+    try:
+        res = requests.get(list_url, params={'serviceKey': API_KEY, 'numOfRows': '1', 'type': 'xml'}, timeout=10)
+        total_count = int(ET.fromstring(res.text).findtext('.//totalCount'))
+        last_page = math.ceil(total_count / 100)
+        print(f">> 총 {total_count}건. 최신 데이터는 {last_page}페이지부터 탐색합니다.")
+    except Exception as e:
+        print(f"❌ 접속 실패: {e}")
+        return
+
+    target_saved = 0
+    stop_signal = False
+
+    # [2단계] 마지막 페이지부터 역순으로 탐색
+    # (최신 -> 과거 순으로 가다가 '2025'가 쏟아지면 멈춤)
+    for page in range(last_page, 0, -1):
+        if stop_signal: break
         
-        print(f">> [스캔] {page}페이지 데이터를 분석합니다...")
+        print(f"\n>> [스캔] {page}페이지 분석 중 (2026년 타겟)...")
+        
         try:
             params = {'serviceKey': API_KEY, 'pageNo': str(page), 'numOfRows': '100', 'type': 'xml'}
             res = requests.get(list_url, params=params, timeout=30)
@@ -49,70 +68,64 @@ def scan_range(start_page, end_page, list_url):
             
             if not items: continue
 
-            # 한 페이지 내의 아이템 전수 검사
-            for item in items:
-                item_seq = item.findtext('ITEM_SEQ')
-                product_name = item.findtext('ITEM_NAME')
-                
-                # 상세 조회로 날짜 확인
-                detail = get_detail_and_date(item_seq)
-                if not detail or not detail['date']: continue
-                
-                real_date = detail['date'].replace("-", "").replace(".", "")
-                
-                # 🎯 타겟: 2026년 2월 1일 ~ 2월 14일 (멈추지 않고 계속 찾음)
-                if "20260201" <= real_date <= "20260214":
-                    print(f"   -> [포착!] {product_name} ({real_date})")
-                    
-                    data = {
-                        "item_seq": item_seq,
-                        "product_name": product_name,
-                        "company": item.findtext('ENTP_NAME'),
-                        "manufacturer": detail['manu'],
-                        "category": item.findtext('SPCLTY_PBLC') or "구분없음",
-                        "approval_type": item.findtext('PRDUCT_TYPE_NAME') or "정상",
-                        "ingredients": detail['ingr'],
-                        "efficacy": detail['effi'],
-                        "approval_date": real_date,
-                        "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-                    }
-                    supabase.table("drug_approvals").upsert(data).execute()
-                    saved_count += 1
-                    time.sleep(0.05) # API 매너 호출
-                    
-        except Exception as e:
-            print(f"⚠️ {page}페이지 에러: {e}")
-            continue
+            # 최신순(역순)으로 검사
+            count_2025_below = 0 # 2025년 이하 데이터 카운트
             
-    return saved_count
+            for item in reversed(items):
+                # 힌트 적용: 품목기준코드(PRDLST_STDR_CODE)의 앞 4자리가 연도!
+                code = item.findtext('PRDLST_STDR_CODE') or item.findtext('ITEM_SEQ') or ""
+                year_prefix = code[:4]
+                
+                # 1. 2026년 코드인 경우 -> 상세 조회 후 저장 (잠재적 타겟)
+                if year_prefix == "2026":
+                    item_seq = item.findtext('ITEM_SEQ')
+                    product_name = item.findtext('ITEM_NAME')
+                    
+                    # 상세 API로 '진짜 날짜(월/일)' 확인
+                    detail = get_detail_info(item_seq)
+                    if not detail or not detail['date']: continue
+                    
+                    real_date = detail['date'].replace("-", "").replace(".", "")
+                    
+                    # 🎯 최종 타겟: 2026년 2월 1일 ~ 2월 14일
+                    if "20260201" <= real_date <= "20260214":
+                        print(f"   -> [🎯포착] {product_name} (코드:{code}, 일자:{real_date})")
+                        
+                        data = {
+                            "item_seq": item_seq,
+                            "product_name": product_name,
+                            "company": item.findtext('ENTP_NAME'),
+                            "manufacturer": detail['manu'],
+                            "category": item.findtext('SPCLTY_PBLC') or "구분없음",
+                            "approval_type": item.findtext('PRDUCT_TYPE_NAME') or "정상",
+                            "ingredients": detail['ingr'],
+                            "efficacy": detail['effi'],
+                            "approval_date": real_date,
+                            "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
+                        }
+                        supabase.table("drug_approvals").upsert(data).execute()
+                        target_saved += 1
+                        time.sleep(0.05)
+                    else:
+                        # 2026년이지만 1월 데이터인 경우 -> 패스
+                        pass
 
-def main():
-    print("=== 🌟 션 팀장님 지시: '양동작전' (앞뒤 전수조사) 시작 ===")
-    list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
-    
-    # [1단계] 전체 페이지 수 계산
-    print(">> [정찰] 전체 데이터 규모 파악 중...")
-    try:
-        res = requests.get(list_url, params={'serviceKey': API_KEY, 'numOfRows': '1', 'type': 'xml'}, timeout=10)
-        total_count = int(ET.fromstring(res.text).findtext('.//totalCount'))
-        last_page = math.ceil(total_count / 100)
-        print(f">> 총 {total_count}건 (약 {last_page}페이지)")
-    except:
-        print("❌ API 접속 실패")
-        return
+                # 2. 2025년 이하 코드인 경우 -> 카운트 증가
+                elif year_prefix.isdigit() and int(year_prefix) <= 2025:
+                    count_2025_below += 1
 
-    total_saved = 0
+            # 한 페이지(100개) 안에 2025년 이하 데이터가 80개 이상이면?
+            # -> 이제 2026년 구간은 끝났다고 판단하고 종료 (조기 퇴근)
+            if count_2025_below >= 80:
+                print(f">> 2025년 데이터({count_2025_below}건)가 주류입니다. 수집을 종료합니다.")
+                stop_signal = True
+                break
 
-    # [2단계] 뒷문 공략 (마지막 5페이지: 보통 여기에 최신 데이터가 있음)
-    # 뒤죽박죽 섞여있을 수 있으니 넉넉하게 뒤에서 10페이지 검사
-    print("\n🚀 [작전1] 뒷문 공략 (최신 데이터 추정 구역)")
-    total_saved += scan_range(last_page, last_page - 10, list_url)
+        except Exception as e:
+            print(f"⚠️ 에러 발생: {e}")
+            continue
 
-    # [3단계] 앞문 공략 (처음 5페이지: 혹시 역순 정렬일 경우 대비)
-    print("\n🚀 [작전2] 앞문 공략 (혹시 모를 역순 대비)")
-    total_saved += scan_range(1, 5, list_url)
-
-    print(f"\n=== 🏆 작전 종료: 총 {total_saved}건(목표 43건) 확보 완료! ===")
+    print(f"\n=== 🏆 작전 종료: 총 {target_saved}건(목표 43건) 정밀 타격 완료! ===")
 
 if __name__ == "__main__":
     main()
