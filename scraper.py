@@ -30,7 +30,6 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # 화면을 크게 설정 (버튼 가림 방지)
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
@@ -66,7 +65,7 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (일자검색 강제 전환 모드) ===")
+    print("=== 크롤링 시작 (숫자 전용 입력 모드) ===")
     
     driver = get_driver()
     wait = WebDriverWait(driver, 20)
@@ -75,118 +74,15 @@ def main():
     base_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
     print(f">> 사이트 접속 중: {base_url}")
     driver.get(base_url)
-    time.sleep(3) # 접속 대기
     
-    # 날짜 계산 (오늘 기준 14일 전까지)
+    # [수정 완료] 하이픈(-)을 뺀 숫자 8자리 포맷 (YYYYMMDD)
     today = datetime.now()
     two_weeks_ago = today - timedelta(days=14)
-    str_start = two_weeks_ago.strftime("%Y-%m-%d")
-    str_end = today.strftime("%Y-%m-%d")
+    str_start = two_weeks_ago.strftime("%Y%m%d") # 예: 20260201
+    str_end = today.strftime("%Y%m%d")           # 예: 20260215
 
     try:
-        print(">> '일자검색' 모드로 전환 시도...")
+        print(">> '일자검색' 모드 전환 중...")
         
-        # [핵심 변경] 모든 라벨(label) 태그를 가져와서 '일자' 글씨가 있는 걸 찾아 클릭합니다.
-        # XPath보다 훨씬 유연하고 확실한 방법입니다.
+        # [1] 일자검색 버튼 클릭
         labels = driver.find_elements(By.TAG_NAME, "label")
-        clicked = False
-        for label in labels:
-            if "일자" in label.text:
-                driver.execute_script("arguments[0].click();", label)
-                print(">> '일자검색' 버튼 클릭 성공!")
-                clicked = True
-                break
-        
-        if not clicked:
-            print("⚠️ '일자검색' 버튼을 못 찾았습니다. (기본 모드로 진행)")
-
-        # 클릭 후 입력칸이 생길 때까지 2초 대기
-        time.sleep(2)
-
-        # [단계 2] 이제 입력칸이 생겼으므로 날짜 주입 (더 이상 null 에러 안 남!)
-        driver.execute_script(f"document.getElementById('startDate').value = '{str_start}';")
-        driver.execute_script(f"document.getElementById('endDate').value = '{str_end}';")
-        print(f">> 날짜 입력 완료: {str_start} ~ {str_end}")
-        
-        # [단계 3] '종료일' 입력칸에서 엔터키(RETURN) 입력
-        end_date_input = driver.find_element(By.ID, "endDate")
-        end_date_input.send_keys(Keys.RETURN)
-        print(">> 엔터키 입력 완료 (검색 실행)")
-        
-        # 결과 로딩 대기
-        time.sleep(5)
-        
-    except Exception as e:
-        print(f"⚠️ 검색 설정 중 오류 발생: {e}")
-        # 오류가 나도 죽지 않고 현재 화면이라도 긁어오도록 진행
-
-    # 2. 데이터 수집
-    page_source = driver.page_source
-    soup = BeautifulSoup(page_source, 'html.parser')
-    
-    rows = soup.select('table.board_list tbody tr')
-    
-    if not rows:
-        print("!! 경고: 테이블을 찾을 수 없습니다.")
-    elif len(rows) == 1 and "데이터가" in rows[0].get_text():
-        print("검색 결과가 없습니다 (0건).")
-    else:
-        print(f"총 {len(rows)}개의 행을 발견했습니다.")
-
-    saved_count = 0
-    for row in rows:
-        cols = row.find_all('td')
-        if len(cols) < 5: continue
-
-        try:
-            # 취소일자 확인 (5번째 칸)
-            cancel_date = cols[4].get_text(strip=True)
-            product_name = cols[1].get_text(strip=True)
-        except:
-            continue
-
-        if cancel_date:
-            print(f"SKIP (취소됨): {product_name}")
-            continue
-
-        try:
-            company = cols[2].get_text(strip=True)
-            approval_date = cols[3].get_text(strip=True)
-            
-            onclick_text = cols[1].find('a')['onclick']
-            item_seq = onclick_text.split("'")[1]
-            
-            # 중복 체크
-            exists = supabase.table("drug_approvals").select("item_seq").eq("item_seq", item_seq).execute()
-            if exists.data:
-                print(f"SKIP (이미 있음): {product_name}")
-                continue
-
-            print(f" + 수집 중: {product_name}")
-            
-            manufacturer, ingredients, efficacy = get_detail_info(item_seq)
-
-            data = {
-                "item_seq": item_seq,
-                "product_name": product_name,
-                "company": company,
-                "manufacturer": manufacturer,
-                "approval_type": "",
-                "ingredients": ingredients,
-                "efficacy": efficacy,
-                "approval_date": approval_date,
-                "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-            }
-            
-            supabase.table("drug_approvals").upsert(data).execute()
-            saved_count += 1
-            
-        except Exception as e:
-            print(f"에러: {e}")
-            continue
-    
-    driver.quit()
-    print(f"\n=== 최종 완료: {saved_count}건 신규 저장됨 ===")
-
-if __name__ == "__main__":
-    main()
