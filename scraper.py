@@ -28,7 +28,7 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # 화면 크기 설정 (안전하게 크게)
+    # 화면 크기를 크게 설정해 버튼이 잘 보이게 함
     chrome_options.add_argument("--window-size=1920,1080")
     # 봇 탐지 회피
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -80,7 +80,6 @@ def main():
         
         # [핵심 변경] 날짜 입력 없이 바로 '검색(돋보기)' 버튼을 찾아서 누릅니다.
         # 기본 설정이 '주간 검색'이므로 최신 데이터가 나옵니다.
-        # 버튼 클래스: btn btn_search
         search_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.btn.btn_search")))
         
         # 확실하게 클릭 (자바스크립트 사용)
@@ -88,7 +87,7 @@ def main():
         print(">> 주간 검색 실행 (클릭 완료)")
         
         # 결과 테이블이 업데이트될 때까지 잠시 대기
-        time.sleep(3) 
+        time.sleep(5) 
         
     except Exception as e:
         print(f"⚠️ 검색 버튼 클릭 중 이슈 발생 (기본 화면으로 진행): {e}")
@@ -140,6 +139,9 @@ def main():
             
             manufacturer, ingredients, efficacy = get_detail_info(item_seq)
 
+            # 상세 URL 생성 (줄바꿈 없이 한 줄로 작성)
+            full_detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
+
             data = {
                 "item_seq": item_seq,
                 "product_name": product_name,
@@ -149,4 +151,18 @@ def main():
                 "ingredients": ingredients,
                 "efficacy": efficacy,
                 "approval_date": approval_date,
-                "detail_url": f"https://nedrug
+                "detail_url": full_detail_url
+            }
+            
+            supabase.table("drug_approvals").upsert(data).execute()
+            saved_count += 1
+            
+        except Exception as e:
+            print(f"에러: {e}")
+            continue
+    
+    driver.quit()
+    print(f"\n=== 최종 완료: {saved_count}건 신규 저장됨 ===")
+
+if __name__ == "__main__":
+    main()
