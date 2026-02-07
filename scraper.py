@@ -12,6 +12,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains  # [추가] 마우스 동작 모방
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -31,7 +32,7 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--window-size=1920,1080") # 화면 크게
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
@@ -65,62 +66,69 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (클릭 강화 + 숫자 8자리 입력) ===")
+    print("=== 크롤링 시작 (마우스 액션 모방 모드) ===")
     
     driver = get_driver()
     wait = WebDriverWait(driver, 20)
+    actions = ActionChains(driver) # 마우스 동작 제어기
     
     # 1. 사이트 접속
     base_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
     print(f">> 사이트 접속 중: {base_url}")
     driver.get(base_url)
     
-    # 숫자 8자리 포맷 (YYYYMMDD)
+    # 숫자 8자리 포맷 (YYYYMMDD) - 사이트 자동 변환용
     today = datetime.now()
     two_weeks_ago = today - timedelta(days=14)
     str_start = two_weeks_ago.strftime("%Y%m%d")
     str_end = today.strftime("%Y%m%d")
 
     try:
-        print(">> '일자검색' 모드 전환 시도...")
+        print(">> '일자검색' 모드 전환 시도 (마우스 액션)...")
         
-        # [1] '일자검색' 라벨을 XPath로 정확하게 찾아서 클릭 (가장 확실한 방법)
+        # [1] '일자검색' 라벨 찾기 (가장 정확한 XPath)
+        # 텍스트에 '일자검색' 또는 '일자'가 포함된 라벨을 찾습니다.
+        target_label = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(), '일자')]")))
+        
+        # [2] 마우스 이동 후 진짜 클릭 (ActionChains 사용)
+        actions.move_to_element(target_label).click().perform()
+        print(">> 마우스로 '일자검색' 클릭 완료")
+        
+        # 혹시 클릭이 씹혔을 경우를 대비해 1초 후 확인 사살 (라디오버튼 직접 클릭)
+        time.sleep(1)
         try:
-            # 텍스트가 '일자검색'인 라벨 찾기
-            date_label = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(), '일자검색')]")))
-            date_label.click()
-            print(">> '일자검색' 라벨 클릭 완료 (방법 1)")
+            radio = driver.find_element(By.CSS_SELECTOR, "input[type='radio'][value='date']") # value가 date인지 확인 필요하나 보통 그렇습니다
+            if not radio.is_selected():
+                driver.execute_script("arguments[0].click();", radio)
+                print(">> (보정) 라디오 버튼 강제 선택 완료")
         except:
-            # 실패 시 라디오 버튼(input)을 직접 찾아서 클릭 시도
-            print(">> 라벨 클릭 실패, 라디오 버튼 직접 클릭 시도...")
-            radio_btn = driver.find_element(By.CSS_SELECTOR, "input[value='date']") # value가 date인 경우가 많음
-            driver.execute_script("arguments[0].click();", radio_btn)
-            print(">> '일자검색' 라디오 버튼 강제 클릭 완료 (방법 2)")
-        
-        # [2] 입력칸이 나타날 때까지 확실히 대기
+            pass # 라벨 클릭이 성공했으면 이 부분은 에러나도 상관없음
+
+        # [3] 입력칸이 나타날 때까지 확실히 대기
         print(">> 입력칸 활성화 대기 중...")
         start_input = wait.until(EC.visibility_of_element_located((By.ID, "startDate")))
         end_input = wait.until(EC.visibility_of_element_located((By.ID, "endDate")))
         
-        # [3] 기존 값 지우고 숫자만 입력
-        start_input.click() # 포커스 주기
+        # [4] 값 입력 (숫자 8자리)
+        start_input.click() 
         start_input.clear()
-        start_input.send_keys(str_start) # 예: 20260201
+        start_input.send_keys(str_start) # 20260201
         
         end_input.click()
         end_input.clear()
-        end_input.send_keys(str_end) # 예: 20260215
+        end_input.send_keys(str_end) # 20260215
         
         print(f">> 날짜 입력 완료: {str_start} ~ {str_end}")
         
-        # [4] 검색 실행 (엔터키)
+        # [5] 엔터키로 검색 실행
         end_input.send_keys(Keys.RETURN)
         print(">> 검색 실행 (Enter)")
         
         time.sleep(5) # 결과 로딩 대기
         
     except Exception as e:
-        print(f"⚠️ 검색 설정 중 오류 (진행 불가 시 현재 화면 캡쳐 추천): {e}")
+        print(f"⚠️ 검색 설정 중 오류: {e}")
+        # 오류가 나도 죽지 않고 현재 화면이라도 긁어오도록 진행
 
     # 2. 데이터 수집
     page_source = driver.page_source
@@ -175,4 +183,18 @@ def main():
                 "ingredients": ingredients,
                 "efficacy": efficacy,
                 "approval_date": approval_date,
-                "detail_url": f"https://
+                "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
+            }
+            
+            supabase.table("drug_approvals").upsert(data).execute()
+            saved_count += 1
+            
+        except Exception as e:
+            print(f"에러: {e}")
+            continue
+    
+    driver.quit()
+    print(f"\n=== 최종 완료: {saved_count}건 신규 저장됨 ===")
+
+if __name__ == "__main__":
+    main()
