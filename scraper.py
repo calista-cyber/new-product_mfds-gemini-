@@ -30,6 +30,7 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    # 화면을 크게 설정하여 요소가 가려지지 않게 함
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
@@ -65,7 +66,7 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (지난 2주 데이터 + 엔터키 검색) ===")
+    print("=== 크롤링 시작 (강제 날짜 주입 + 엔터키) ===")
     
     driver = get_driver()
     wait = WebDriverWait(driver, 20)
@@ -74,8 +75,9 @@ def main():
     base_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
     print(f">> 사이트 접속 중: {base_url}")
     driver.get(base_url)
+    time.sleep(3) # 기본 로딩 대기
     
-    # 날짜 계산 (오늘 기준 14일 전까지 넉넉하게 잡음)
+    # 날짜 계산 (오늘 기준 14일 전까지)
     today = datetime.now()
     two_weeks_ago = today - timedelta(days=14)
     str_start = two_weeks_ago.strftime("%Y-%m-%d")
@@ -84,28 +86,22 @@ def main():
     try:
         print(">> 검색 조건 설정 중...")
         
-        # [단계 1] '일자검색' 라디오 버튼을 찾아서 클릭 (이걸 눌러야 날짜 입력칸이 활성화됨)
-        # XPATH를 사용하여 '일자검색'이라는 글자가 포함된 라벨을 찾음
-        date_radio = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(),'일자검색')]")))
-        date_radio.click()
-        time.sleep(1) # UI 변경 대기
-
-        # [단계 2] 자바스크립트로 날짜 강제 주입
+        # [핵심 변경] 라디오 버튼 클릭 과정 생략! (에러 원인 제거)
+        # 바로 자바스크립트로 날짜를 꽂아 넣습니다.
         driver.execute_script(f"document.getElementById('startDate').value = '{str_start}';")
         driver.execute_script(f"document.getElementById('endDate').value = '{str_end}';")
-        print(f">> 날짜 입력 완료: {str_start} ~ {str_end}")
+        print(f">> 날짜 강제 주입 완료: {str_start} ~ {str_end}")
         
-        # [단계 3] 돋보기 버튼 대신 '종료일' 입력칸에서 엔터키(RETURN) 입력!
+        # [핵심] '종료일' 입력칸을 찾아서 엔터키(RETURN) 입력
         end_date_input = driver.find_element(By.ID, "endDate")
         end_date_input.send_keys(Keys.RETURN)
-        print(">> 엔터키로 검색 실행 완료")
+        print(">> 엔터키 입력 완료 (검색 실행)")
         
-        # 결과 테이블 로딩 대기
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.board_list tbody tr")))
-        time.sleep(3) 
+        # 결과가 로딩될 때까지 5초 정도 넉넉히 대기
+        time.sleep(5)
         
     except Exception as e:
-        print(f"⚠️ 검색 설정 중 오류 (기본 목록으로 시도): {e}")
+        print(f"⚠️ 검색 실행 중 경고 (그래도 진행해봅니다): {e}")
 
     # 2. 데이터 수집
     page_source = driver.page_source
@@ -113,8 +109,10 @@ def main():
     
     rows = soup.select('table.board_list tbody tr')
     
-    if not rows or (len(rows) == 1 and "데이터가" in rows[0].get_text()):
-        print("검색 결과가 없습니다.")
+    if not rows:
+        print("!! 경고: 테이블을 찾을 수 없습니다.")
+    elif len(rows) == 1 and "데이터가" in rows[0].get_text():
+        print("검색 결과가 없습니다 (0건).")
     else:
         print(f"총 {len(rows)}개의 행을 발견했습니다.")
 
