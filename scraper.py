@@ -1,28 +1,28 @@
 import os
 import requests
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
-# 1. Supabase 설정
+# 1. Supabase 연결 (절대 건드리지 마세요!)
 URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
 def main():
-    print("=== 🚀 션 팀장님 전용: 강제 데이터 요청 작전 시작 ===")
+    print("=== 🚀 션 팀장님 전용: 데이터 강제 수집 작전 시작 ===")
     
-    # 2월 1일부터 오늘까지
+    # 2월 1일부터 오늘까지 (팀장님 제안 날짜)
     s_start = "2026-02-01"
     s_end = datetime.now().strftime("%Y-%m-%d")
     
-    # 사람처럼 보이기 위한 세션 정보 (Cookie 자동 획득)
+    # 세션 유지 (진짜 사람처럼 보이게 함)
     session = requests.Session()
     session.get("https://nedrug.mfds.go.kr/pbp/CCBAE01", timeout=20)
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01',
         'Origin': 'https://nedrug.mfds.go.kr',
         'Content-Type': 'application/x-www-form-urlencoded'
@@ -30,11 +30,11 @@ def main():
 
     total_saved = 0
 
-    # 1페이지부터 5페이지까지 훑기
+    # 41건을 모두 잡기 위해 1~5페이지 순차 공략
     for page in range(1, 6):
-        print(f"\n>> [ {page} 페이지 ] 데이터 강제 요청 중...")
+        print(f"\n>> [ {page} 페이지 ] 데이터 인계 중...")
         
-        # [핵심] 식약처 서버가 요구하는 모든 검색 파라미터를 몸통(Data)에 실어 보냅니다.
+        # [핵심] 식약처 서버가 요구하는 검색 신호를 몸통(Data)에 실어 보냅니다.
         payload = {
             'page': page,
             'searchYn': 'true',
@@ -45,7 +45,7 @@ def main():
         }
 
         try:
-            # POST 방식으로 요청해야 서버가 "검색 버튼 눌렀구나"라고 인식합니다.
+            # POST 방식으로 요청하여 서버가 "검색 버튼을 눌렀다"고 믿게 만듭니다.
             res = session.post("https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro", 
                                headers=headers, data=payload, timeout=30)
             
@@ -53,7 +53,7 @@ def main():
             rows = soup.select('table.board_list tbody tr')
 
             if not rows or "데이터가" in rows[0].get_text():
-                print("수집할 데이터가 더 이상 없습니다.")
+                print("더 이상 수집할 데이터가 없습니다.")
                 break
 
             for row in rows:
@@ -73,7 +73,7 @@ def main():
                     "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
                 }
                 
-                # 금고(Supabase)에 강제 저장
+                # Supabase에 데이터 꽂기 (Upsert)
                 supabase.table("drug_approvals").upsert(data).execute()
                 total_saved += 1
 
@@ -83,7 +83,7 @@ def main():
             print(f"⚠️ {page}페이지 요청 실패: {e}")
             continue
 
-    print(f"\n=== 🏆 작전 종료: 총 {total_saved}건이 금고에 안착했습니다! ===")
+    print(f"\n=== 🏆 작전 종료: 총 {total_saved}건이 Supabase 금고에 안착했습니다! ===")
 
 if __name__ == "__main__":
     main()
