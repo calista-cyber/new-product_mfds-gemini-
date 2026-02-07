@@ -1,0 +1,30 @@
+name: Weekly Nedrug Scraper
+
+on:
+  schedule:
+    # 한국 시간 일요일 21:00 = UTC 12:00
+    - cron: '0 12 * * 0'
+  workflow_dispatch: # 수동 실행 버튼 추가
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 라이브러리 설치
+        run: |
+          pip install -r requirements.txt
+
+      - name: 크롤러 실행
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python scraper.py
