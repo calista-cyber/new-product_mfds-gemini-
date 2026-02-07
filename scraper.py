@@ -1,5 +1,6 @@
 import time
 import os
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
@@ -9,6 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys  # 엔터키 사용을 위해 필수
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -28,9 +30,7 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # 화면 크기를 크게 설정해 버튼이 잘 보이게 함
     chrome_options.add_argument("--window-size=1920,1080")
-    # 봇 탐지 회피
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
@@ -65,7 +65,7 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (주간 검색 모드) ===")
+    print("=== 크롤링 시작 (지난 2주 데이터 + 엔터키 검색) ===")
     
     driver = get_driver()
     wait = WebDriverWait(driver, 20)
@@ -75,32 +75,46 @@ def main():
     print(f">> 사이트 접속 중: {base_url}")
     driver.get(base_url)
     
+    # 날짜 계산 (오늘 기준 14일 전까지 넉넉하게 잡음)
+    today = datetime.now()
+    two_weeks_ago = today - timedelta(days=14)
+    str_start = two_weeks_ago.strftime("%Y-%m-%d")
+    str_end = today.strftime("%Y-%m-%d")
+
     try:
-        print(">> 화면 로딩 및 검색 버튼 찾는 중...")
+        print(">> 검색 조건 설정 중...")
         
-        # [핵심 변경] 날짜 입력 없이 바로 '검색(돋보기)' 버튼을 찾아서 누릅니다.
-        # 기본 설정이 '주간 검색'이므로 최신 데이터가 나옵니다.
-        search_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.btn.btn_search")))
+        # [단계 1] '일자검색' 라디오 버튼을 찾아서 클릭 (이걸 눌러야 날짜 입력칸이 활성화됨)
+        # XPATH를 사용하여 '일자검색'이라는 글자가 포함된 라벨을 찾음
+        date_radio = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(),'일자검색')]")))
+        date_radio.click()
+        time.sleep(1) # UI 변경 대기
+
+        # [단계 2] 자바스크립트로 날짜 강제 주입
+        driver.execute_script(f"document.getElementById('startDate').value = '{str_start}';")
+        driver.execute_script(f"document.getElementById('endDate').value = '{str_end}';")
+        print(f">> 날짜 입력 완료: {str_start} ~ {str_end}")
         
-        # 확실하게 클릭 (자바스크립트 사용)
-        driver.execute_script("arguments[0].click();", search_btn)
-        print(">> 주간 검색 실행 (클릭 완료)")
+        # [단계 3] 돋보기 버튼 대신 '종료일' 입력칸에서 엔터키(RETURN) 입력!
+        end_date_input = driver.find_element(By.ID, "endDate")
+        end_date_input.send_keys(Keys.RETURN)
+        print(">> 엔터키로 검색 실행 완료")
         
-        # 결과 테이블이 업데이트될 때까지 잠시 대기
-        time.sleep(5) 
+        # 결과 테이블 로딩 대기
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.board_list tbody tr")))
+        time.sleep(3) 
         
     except Exception as e:
-        print(f"⚠️ 검색 버튼 클릭 중 이슈 발생 (기본 화면으로 진행): {e}")
+        print(f"⚠️ 검색 설정 중 오류 (기본 목록으로 시도): {e}")
 
-    # 2. 데이터 수집 (현재 보이는 페이지 스크랩)
+    # 2. 데이터 수집
     page_source = driver.page_source
     soup = BeautifulSoup(page_source, 'html.parser')
     
     rows = soup.select('table.board_list tbody tr')
     
-    # 데이터 유무 확인
     if not rows or (len(rows) == 1 and "데이터가" in rows[0].get_text()):
-        print("검색 결과가 없습니다 (또는 데이터 로딩 실패).")
+        print("검색 결과가 없습니다.")
     else:
         print(f"총 {len(rows)}개의 행을 발견했습니다.")
 
@@ -109,14 +123,13 @@ def main():
         cols = row.find_all('td')
         if len(cols) < 5: continue
 
-        # [인덱스 확인] 0:순번, 1:제품명, 2:업체명, 3:허가일자, 4:취소일자
         try:
+            # 취소일자 확인 (5번째 칸)
             cancel_date = cols[4].get_text(strip=True)
             product_name = cols[1].get_text(strip=True)
         except:
             continue
 
-        # 취소된 약 제외
         if cancel_date:
             print(f"SKIP (취소됨): {product_name}")
             continue
@@ -125,7 +138,6 @@ def main():
             company = cols[2].get_text(strip=True)
             approval_date = cols[3].get_text(strip=True)
             
-            # 고유번호 추출
             onclick_text = cols[1].find('a')['onclick']
             item_seq = onclick_text.split("'")[1]
             
@@ -139,9 +151,6 @@ def main():
             
             manufacturer, ingredients, efficacy = get_detail_info(item_seq)
 
-            # 상세 URL 생성 (줄바꿈 없이 한 줄로 작성)
-            full_detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-
             data = {
                 "item_seq": item_seq,
                 "product_name": product_name,
@@ -151,7 +160,7 @@ def main():
                 "ingredients": ingredients,
                 "efficacy": efficacy,
                 "approval_date": approval_date,
-                "detail_url": full_detail_url
+                "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
             }
             
             supabase.table("drug_approvals").upsert(data).execute()
