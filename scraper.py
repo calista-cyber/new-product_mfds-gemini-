@@ -10,7 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys  # 엔터키 사용을 위해 필수
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -30,7 +30,7 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # 화면을 크게 설정하여 요소가 가려지지 않게 함
+    # 화면을 크게 설정 (버튼 가림 방지)
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
@@ -66,7 +66,7 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 (강제 날짜 주입 + 엔터키) ===")
+    print("=== 크롤링 시작 (일자검색 강제 전환 모드) ===")
     
     driver = get_driver()
     wait = WebDriverWait(driver, 20)
@@ -75,7 +75,7 @@ def main():
     base_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
     print(f">> 사이트 접속 중: {base_url}")
     driver.get(base_url)
-    time.sleep(3) # 기본 로딩 대기
+    time.sleep(3) # 접속 대기
     
     # 날짜 계산 (오늘 기준 14일 전까지)
     today = datetime.now()
@@ -84,24 +84,41 @@ def main():
     str_end = today.strftime("%Y-%m-%d")
 
     try:
-        print(">> 검색 조건 설정 중...")
+        print(">> '일자검색' 모드로 전환 시도...")
         
-        # [핵심 변경] 라디오 버튼 클릭 과정 생략! (에러 원인 제거)
-        # 바로 자바스크립트로 날짜를 꽂아 넣습니다.
+        # [핵심 변경] 모든 라벨(label) 태그를 가져와서 '일자' 글씨가 있는 걸 찾아 클릭합니다.
+        # XPath보다 훨씬 유연하고 확실한 방법입니다.
+        labels = driver.find_elements(By.TAG_NAME, "label")
+        clicked = False
+        for label in labels:
+            if "일자" in label.text:
+                driver.execute_script("arguments[0].click();", label)
+                print(">> '일자검색' 버튼 클릭 성공!")
+                clicked = True
+                break
+        
+        if not clicked:
+            print("⚠️ '일자검색' 버튼을 못 찾았습니다. (기본 모드로 진행)")
+
+        # 클릭 후 입력칸이 생길 때까지 2초 대기
+        time.sleep(2)
+
+        # [단계 2] 이제 입력칸이 생겼으므로 날짜 주입 (더 이상 null 에러 안 남!)
         driver.execute_script(f"document.getElementById('startDate').value = '{str_start}';")
         driver.execute_script(f"document.getElementById('endDate').value = '{str_end}';")
-        print(f">> 날짜 강제 주입 완료: {str_start} ~ {str_end}")
+        print(f">> 날짜 입력 완료: {str_start} ~ {str_end}")
         
-        # [핵심] '종료일' 입력칸을 찾아서 엔터키(RETURN) 입력
+        # [단계 3] '종료일' 입력칸에서 엔터키(RETURN) 입력
         end_date_input = driver.find_element(By.ID, "endDate")
         end_date_input.send_keys(Keys.RETURN)
         print(">> 엔터키 입력 완료 (검색 실행)")
         
-        # 결과가 로딩될 때까지 5초 정도 넉넉히 대기
+        # 결과 로딩 대기
         time.sleep(5)
         
     except Exception as e:
-        print(f"⚠️ 검색 실행 중 경고 (그래도 진행해봅니다): {e}")
+        print(f"⚠️ 검색 설정 중 오류 발생: {e}")
+        # 오류가 나도 죽지 않고 현재 화면이라도 긁어오도록 진행
 
     # 2. 데이터 수집
     page_source = driver.page_source
