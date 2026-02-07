@@ -1,69 +1,78 @@
-import time
 import os
+import requests
+import time
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
-# 1. Supabase 연결 설정
+# 1. Supabase 설정
 URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
-def get_driver():
-    """진짜 브라우저처럼 위장한 셀레니움 설정"""
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-    # 봇 감지 회피용 헤더
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+def get_detail_info(item_seq, session):
+    """상세 페이지 데이터 정밀 수집"""
+    detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
+    try:
+        # 타임아웃을 넉넉히 주어 연결 안정성 확보
+        res = session.get(detail_url, timeout=30)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 위탁제조업체
+        manufacturer = ""
+        mf_tag = soup.find('th', string=lambda t: t and ('위탁' in t or '수탁' in t))
+        if mf_tag: manufacturer = mf_tag.find_next('td').get_text(strip=True)
+
+        # 성분명
+        ingredients = []
+        ing_table = soup.select('div#scroll_02 table tbody tr')
+        for tr in ing_table:
+            tds = tr.find_all('td')
+            if len(tds) > 1: ingredients.append(tds[1].get_text(strip=True))
+
+        # 효능효과
+        efficacy = ""
+        eff_div = soup.select_one('div#scroll_03')
+        if eff_div: efficacy = eff_div.get_text(strip=True)[:300] 
+
+        return manufacturer, ", ".join(ingredients[:5]), efficacy
+    except:
+        return "", "", ""
 
 def main():
-    print("=== 🚨 션 팀장님 전용: 물리적 검색 버튼 타격 모드 시작 ===")
-    driver = get_driver()
-    wait = WebDriverWait(driver, 20)
+    print("=== 🚀 션 팀장님 제안: URL 직접 타격 최종 작전 시작 ===")
     
-    # [1] 정문으로 당당하게 입장 (보안 세션 획득)
-    driver.get("https://nedrug.mfds.go.kr/pbp/CCBAE01")
-    time.sleep(3)
+    # 세션 생성 (사람처럼 보이기 위한 헤더 설정)
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+    })
 
-    # [2] 날짜 설정 (2월 1일부터 오늘까지)
+    # 팀장님의 정밀 타격 기간: 2월 1일 ~ 오늘
     s_start = "2026-02-01"
     s_end = datetime.now().strftime("%Y-%m-%d")
+    
+    total_saved = 0
 
-    try:
-        # 일자검색 버튼 클릭
-        date_radio = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(),'일자검색')]")))
-        driver.execute_script("arguments[0].click();", date_radio)
-        
-        # 날짜 강제 주입
-        driver.execute_script(f"document.getElementById('startDate').value = '{s_start}';")
-        driver.execute_script(f"document.getElementById('endDate').value = '{s_end}';")
-        print(f">> 날짜 설정 완료: {s_start} ~ {s_end}")
+    # 41건을 모두 잡기 위해 1~5페이지 순회
+    for page in range(1, 6):
+        target_url = (
+            f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?"
+            f"page={page}&limit=&sort=&sortOrder=true&searchYn=true&"
+            f"sDateGb=date&sYear=2026&sMonth=2&"
+            f"sPermitDateStart={s_start}&sPermitDateEnd={s_end}&btnSearch="
+        )
 
-        # 검색 버튼 물리적 클릭
-        search_btn = driver.find_element(By.CSS_SELECTOR, "button.btn.btn_search")
-        driver.execute_script("arguments[0].click();", search_btn)
-        print(">> 검색 실행 완료. 결과 로딩 중...")
-        time.sleep(5)
-
-        total_saved = 0
-        
-        # [3] 페이지 순회하며 강제 수집
-        while True:
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
+        print(f"\n>> [ {page} 페이지 ] 침투 중...")
+        try:
+            res = session.get(target_url, timeout=30)
+            soup = BeautifulSoup(res.text, 'html.parser')
             rows = soup.select('table.board_list tbody tr')
 
             if not rows or (len(rows) == 1 and "데이터가" in rows[0].get_text()):
+                print("더 이상 데이터가 없습니다.")
                 break
 
             for row in rows:
@@ -73,33 +82,32 @@ def main():
                 product_name = cols[1].get_text(strip=True)
                 item_seq = cols[1].find('a')['onclick'].split("'")[1]
 
-                print(f"   -> DB 전송: {product_name}")
+                print(f"   -> 발견: {product_name} (금고 이송 준비)")
+                
+                # 상세 정보 가져오기
+                manufacturer, ingredients, efficacy = get_detail_info(item_seq, session)
+
                 data = {
                     "item_seq": item_seq,
                     "product_name": product_name,
                     "company": cols[2].get_text(strip=True),
+                    "manufacturer": manufacturer,
+                    "ingredients": ingredients,
+                    "efficacy": efficacy,
                     "approval_date": cols[3].get_text(strip=True),
                     "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
                 }
                 
-                # 중복 무시하고 일단 다 집어넣기
+                # [중요] 중복 체크 없이 Upsert로 강제 저장
                 supabase.table("drug_approvals").upsert(data).execute()
                 total_saved += 1
+                time.sleep(0.3)
 
-            # 다음 페이지 버튼 클릭 시도
-            try:
-                next_btn = driver.find_element(By.XPATH, "//a[contains(@onclick, 'page_move') and text()='>']")
-                driver.execute_script("arguments[0].click();", next_btn)
-                time.sleep(3)
-            except:
-                break
+        except Exception as e:
+            print(f"⚠️ {page}페이지 요청 중 실패: {e}")
+            continue
 
-        print(f"\n=== 🏆 복구 완료: 총 {total_saved}건이 Supabase 금고에 안착했습니다! ===")
-
-    except Exception as e:
-        print(f"❌ 에러 발생: {e}")
-    finally:
-        driver.quit()
+    print(f"\n=== 🏆 작전 종료: 총 {total_saved}건이 Supabase 금고에 안착했습니다! ===")
 
 if __name__ == "__main__":
     main()
