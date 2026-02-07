@@ -3,143 +3,98 @@ import os
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
-import requests
 
-# 1. Supabase 연결 설정
+# 셀레니움 필수 도구
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# 1. Supabase 연결
 URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
-
-if not URL or not KEY:
-    print("Error: Supabase 환경변수가 설정되지 않았습니다.")
-    exit(1)
-
 supabase: Client = create_client(URL, KEY)
 
-def get_detail_info(item_seq):
-    """상세 페이지에서 위탁제조업체, 성분, 효능효과 추출"""
-    detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01'
-    }
-    try:
-        res = requests.get(detail_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        manufacturer = ""
-        mf_tag = soup.find('th', string=lambda t: t and ('위탁' in t or '수탁' in t))
-        if mf_tag: manufacturer = mf_tag.find_next('td').get_text(strip=True)
-
-        ingredients = []
-        ing_table = soup.select('div#scroll_02 table tbody tr')
-        for tr in ing_table:
-            tds = tr.find_all('td')
-            if len(tds) > 1: ingredients.append(tds[1].get_text(strip=True))
-        ingredients_str = ", ".join(ingredients[:5])
-
-        efficacy = ""
-        eff_div = soup.select_one('div#scroll_03')
-        if eff_div: efficacy = eff_div.get_text(strip=True)[:300] 
-
-        return manufacturer, ingredients_str, efficacy
-    except:
-        return "", "", ""
+def get_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
 
 def main():
-    print("=== 크롤링 시작 (션 팀장님 URL 타격 + 보안 통과 모드) ===")
+    print("=== 크롤링 시작 (션 팀장님 URL 기반 물리적 타격 모드) ===")
+    driver = get_driver()
+    wait = WebDriverWait(driver, 20)
     
-    # [설정] 검색 기간: 2월 1일부터 오늘까지 (팀장님 제안 반영)
+    # [1] 먼저 대문 페이지 접속 (보안 세션 획득)
+    driver.get("https://nedrug.mfds.go.kr/pbp/CCBAE01")
+    time.sleep(3)
+
+    # [2] 션 팀장님이 분석하신 검색 조건 강제 주입
+    # 2월 1일부터 오늘까지로 설정
     s_start = "2026-02-01"
     s_end = datetime.now().strftime("%Y-%m-%d")
     
-    current_page = 1
-    total_saved = 0
+    try:
+        # '일자검색' 라디오 버튼 클릭
+        date_radio = wait.until(EC.element_to_be_clickable((By.XPATH, "//label[contains(text(),'일자검색')]")))
+        date_radio.click()
+        
+        # 날짜 직접 주입
+        driver.execute_script(f"document.getElementById('startDate').value = '{s_start}';")
+        driver.execute_script(f"document.getElementById('endDate').value = '{s_end}';")
+        print(f">> 날짜 설정 완료: {s_start} ~ {s_end}")
 
-    # 브라우저인 척 위장하는 세션 생성
-    session = requests.Session()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01', # 나 여기서 왔어! 라고 말해주는 부분
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
-    }
+        # [3] 검색 버튼 물리적 클릭 (돋보기 모양)
+        search_btn = driver.find_element(By.CSS_SELECTOR, "button.btn.btn_search")
+        driver.execute_script("arguments[0].click();", search_btn)
+        print(">> 검색 실행 완료")
+        time.sleep(5)
 
-    while True:
-        # 팀장님이 분석하신 URL 구조를 그대로 활용
-        target_url = (
-            f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?"
-            f"page={current_page}&limit=&sort=&sortOrder=true&searchYn=true&"
-            f"sDateGb=date&sYear=2026&sMonth=2&sWeek=2&"
-            f"sPermitDateStart={s_start}&sPermitDateEnd={s_end}&btnSearch="
-        )
-
-        print(f"\n>> [ {current_page} 페이지 ] 접속 중...")
-        try:
-            res = session.get(target_url, headers=headers, timeout=15)
-            soup = BeautifulSoup(res.text, 'html.parser')
-            
+        # [4] 데이터 수집 및 페이지네이션
+        total_saved = 0
+        while True:
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
             rows = soup.select('table.board_list tbody tr')
             
-            # 종료 조건 확인
-            if not rows or (len(rows) == 1 and "데이터가" in rows[0].get_text()):
-                print("더 이상 데이터가 없습니다. (수집 종료)")
-                break
-
-            print(f"현재 페이지에서 {len(rows)}건을 확인합니다.")
+            if not rows or "데이터가" in rows[0].get_text(): break
 
             for row in rows:
                 cols = row.find_all('td')
-                if len(cols) < 5: continue
+                if len(cols) < 5 or cols[4].get_text(strip=True): continue # 취소 건 제외
 
-                cancel_date = cols[4].get_text(strip=True)
                 product_name = cols[1].get_text(strip=True)
+                item_seq = cols[1].find('a')['onclick'].split("'")[1]
 
-                if cancel_date:
-                    print(f"SKIP (취소됨): {product_name}")
-                    continue
-
-                try:
-                    company = cols[2].get_text(strip=True)
-                    approval_date = cols[3].get_text(strip=True)
-                    
-                    onclick_text = cols[1].find('a')['onclick']
-                    item_seq = onclick_text.split("'")[1]
-                    
-                    # 중복 체크
-                    exists = supabase.table("drug_approvals").select("item_seq").eq("item_seq", item_seq).execute()
-                    if exists.data:
-                        print(f"이미 있음: {product_name}")
-                        continue
-
-                    print(f" + 수집 시도: {product_name}")
-                    manufacturer, ingredients, efficacy = get_detail_info(item_seq)
-
+                # 중복 체크 후 저장
+                exists = supabase.table("drug_approvals").select("item_seq").eq("item_seq", item_seq).execute()
+                if not exists.data:
+                    print(f" + 수집: {product_name}")
                     data = {
                         "item_seq": item_seq,
                         "product_name": product_name,
-                        "company": company,
-                        "manufacturer": manufacturer,
-                        "ingredients": ingredients,
-                        "efficacy": efficacy,
-                        "approval_date": approval_date,
+                        "company": cols[2].get_text(strip=True),
+                        "approval_date": cols[3].get_text(strip=True),
                         "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
                     }
-                    
                     supabase.table("drug_approvals").upsert(data).execute()
                     total_saved += 1
-                    time.sleep(0.1)
 
-                except Exception as e:
-                    print(f"처리 중 에러: {e}")
-                    continue
-            
-            current_page += 1
-            time.sleep(1) # 서버 예의 대기
+            # 다음 페이지 버튼 클릭 (있을 경우)
+            try:
+                next_btn = driver.find_element(By.XPATH, "//a[contains(@onclick, 'page_move') and text()='>']")
+                driver.execute_script("arguments[0].click();", next_btn)
+                time.sleep(3)
+            except: break
 
-        except Exception as e:
-            print(f"페이지 접속 에러: {e}")
-            break
+        print(f"\n=== 최종 완료: 총 {total_saved}건 저장됨 ===")
+    finally:
+        driver.quit()
 
-    print(f"\n=== 최종 완료: 총 {total_saved}건 신규 저장됨 ===")
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
