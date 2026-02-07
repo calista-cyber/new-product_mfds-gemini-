@@ -11,14 +11,14 @@ KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
 def main():
-    print("=== 🚨 션 팀장님 전용: 식약처 보안 완전 무력화 및 데이터 강제 인출 === ")
+    print("=== 🚨 션 팀장님 제안: 식약처 보안 완전 무력화 및 강제 데이터 인출 === ")
     
     # [설정] 2월 1일부터 오늘까지 (팀장님의 정밀 타격 기간)
     s_start = "2026-02-01"
     s_end = datetime.now().strftime("%Y-%m-%d")
     
     session = requests.Session()
-    # 통행증(Cookie) 확보를 위한 첫 방문
+    # 통행증(Cookie) 발급을 위한 첫 방문
     session.get("https://nedrug.mfds.go.kr/pbp/CCBAE01", timeout=20)
     
     headers = {
@@ -32,9 +32,9 @@ def main():
 
     # 41건 정복을 위해 5페이지까지 강제 순회
     for page in range(1, 6):
-        print(f"\n>> [ {page} 페이지 ] 보안 게이트 통과 중...")
+        print(f"\n>> [ {page} 페이지 ] 데이터 강제 추출 중...")
         
-        # [핵심] 식약처 서버가 거부할 수 없는 정밀 파라미터 조합
+        # [핵심] 식약처 서버가 거부할 수 없는 정밀 파라미터 조합 (보안 돌파구)
         payload = {
             'page': page,
             'limit': '10',
@@ -71,7 +71,7 @@ def main():
                     "item_seq": item_seq,
                     "product_name": product_name,
                     "company": cols[2].get_text(strip=True),
-                    "manufacturer": "상세정보 확인 필요", # 상세페이지 추가 수집 가능
+                    "manufacturer": "상세정보 로딩 중", # 상세페이지 추가 수집용
                     "category": "전문의약품" if "전문" in product_name else "일반의약품", 
                     "approval_type": "품목허가",
                     "ingredients": "성분 정보 로딩 중",
@@ -90,7 +90,7 @@ def main():
             print(f"⚠️ {page}페이지 요청 실패: {e}")
             continue
 
-    print(f"\n=== 🏆 성공: 총 {total_saved}건이 Supabase 금고에 안착했습니다! ===")
+    print(f"\n=== 🏆 작전 성공: 총 {total_saved}건이 금고에 안착했습니다! ===")
 
 if __name__ == "__main__":
     main()
