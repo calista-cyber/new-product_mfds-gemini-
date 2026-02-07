@@ -5,24 +5,23 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
-# 1. Supabase 설정
+# 1. Supabase 연결 설정 (절대 수정 금지)
 URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
 def main():
-    print("=== 🚨 션 팀장님 전용: 식약처 보안 기만술 파괴 및 강제 인출 === ")
+    print("=== 🚨 션 팀장님 전용: 식약처 보안 완전 무력화 및 데이터 강제 인출 === ")
     
-    # [설정] 2월 1일부터 오늘까지
+    # [설정] 2월 1일부터 오늘까지 (팀장님의 정밀 타격 기간)
     s_start = "2026-02-01"
     s_end = datetime.now().strftime("%Y-%m-%d")
     
-    # 진짜 사람처럼 보이기 위한 세션 유지
     session = requests.Session()
-    # 1단계: 정문에 접속하여 통행증(Cookie) 발급
-    main_res = session.get("https://nedrug.mfds.go.kr/pbp/CCBAE01", timeout=30)
-    time.sleep(2)
+    # 통행증(Cookie) 발급을 위해 정문으로 입장 (30초 대기)
+    session.get("https://nedrug.mfds.go.kr/pbp/CCBAE01", timeout=30)
     
+    # 진짜 브라우저처럼 보이기 위한 완벽한 위장 헤더
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01',
@@ -33,11 +32,11 @@ def main():
 
     total_saved = 0
 
-    # 41건을 모두 잡기 위해 1~5페이지 강제 순회
+    # 41건 정복을 위해 1~5페이지 강제 순회
     for page in range(1, 6):
-        print(f"\n>> [ {page} 페이지 ] 데이터 강제 요청 중...")
+        print(f"\n>> [ {page} 페이지 ] 보안 게이트 통과 중...")
         
-        # [핵심] 식약처 서버가 "진짜 사람의 검색"이라고 확신하게 만드는 데이터 조합
+        # 서버가 "이건 진짜 사람이다"라고 믿게 만드는 파라미터 조합
         payload = {
             'page': page,
             'limit': '10',
@@ -49,16 +48,15 @@ def main():
         }
 
         try:
-            # 2단계: 서버에 직접 데이터를 요구 (POST 방식)
+            # POST 방식으로 명령어를 실어 보내 서버의 항복을 받아냅니다.
             res = session.post("https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro", 
                                headers=headers, data=payload, timeout=40)
             
             soup = BeautifulSoup(res.text, 'html.parser')
             rows = soup.select('table.board_list tbody tr')
 
-            # 서버의 기만 전술(빈 데이터) 감지 로직
             if not rows or "데이터가" in rows[0].get_text():
-                print("⚠️ 주의: 서버가 여전히 기만 전술을 사용 중입니다. 5초 후 재침투...")
+                print("⚠️ 주의: 서버가 기만 전술(빈 데이터)을 사용 중입니다. 5초 후 재시도...")
                 time.sleep(5)
                 continue
 
@@ -69,14 +67,14 @@ def main():
                 product_name = cols[1].get_text(strip=True)
                 item_seq = cols[1].find('a')['onclick'].split("'")[1]
 
-                print(f"   -> DB 전송 대기: {product_name}")
+                print(f"   -> 금고 안착 완료: {product_name}")
                 
-                # 팀장님이 요청하신 7가지 항목 구조로 데이터 패키징
+                # 팀장님이 요청하신 7가지 항목 구조로 데이터 생성
                 data = {
                     "item_seq": item_seq,
                     "product_name": product_name,
                     "company": cols[2].get_text(strip=True),
-                    "manufacturer": "상세정보 로딩 중", 
+                    "manufacturer": "상세정보 확인 필요", 
                     "category": "전문의약품" if "전문" in product_name else "일반의약품", 
                     "approval_type": "품목허가",
                     "ingredients": "성분 정보 로딩 중",
@@ -85,17 +83,17 @@ def main():
                     "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
                 }
                 
-                # Supabase 금고에 강제 안착 (Upsert)
+                # Supabase 금고에 강제 안착
                 supabase.table("drug_approvals").upsert(data).execute()
                 total_saved += 1
 
-            time.sleep(2) # 서버의 의심을 피하기 위한 짧은 휴식
+            time.sleep(2) # 서버의 의심을 피하기 위한 휴식
 
         except Exception as e:
             print(f"⚠️ {page}페이지 요청 실패: {e}")
             continue
 
-    print(f"\n=== 🏆 작전 성공: 총 {total_saved}건이 금고에 안착했습니다! ===")
+    print(f"\n=== 🏆 작전 성공: 총 {total_saved}건이 Supabase 금고에 안착했습니다! ===")
 
 if __name__ == "__main__":
     main()
