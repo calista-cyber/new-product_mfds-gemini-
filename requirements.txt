@@ -5,3 +5,5 @@ beautifulsoup4
 supabase
 pandas
 openpyxl
+selenium
+webdriver-manager
