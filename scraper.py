@@ -12,9 +12,10 @@ URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
-def get_full_detail(item_seq):
+def get_full_detail_and_date(item_seq):
     """
-    [상세 API] 목록에는 없는 '효능효과', '위탁제조업체' 등을 가져옵니다.
+    [상세 API] 날짜, 성분, 효능 등 모든 핵심 정보를 가져옵니다.
+    목록 API가 날짜를 안 줘도, 여기서 확실하게 알아낼 수 있습니다.
     """
     url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {'serviceKey': API_KEY, 'item_seq': item_seq, 'numOfRows': '1', 'type': 'xml'}
@@ -26,117 +27,102 @@ def get_full_detail(item_seq):
         
         if not item: return None
 
-        # 상세 API에서 추가 정보 추출
-        manufacturer = item.findtext('MANU_METHOD') or "정보없음" # 위탁/제조
+        # [핵심] 상세 API에서 진짜 허가일자 추출
+        permit_date = item.findtext('ITEM_PERMIT_DATE') or item.findtext('PERMIT_DATE')
+        
+        manufacturer = item.findtext('MANU_METHOD') or "정보없음"
+        ingredients = item.findtext('MAIN_ITEM_INGR') or item.findtext('ITEM_INGR_NAME') or "정보없음"
         efficacy_raw = item.findtext('EE_DOC_DATA') or "상세참조"
         efficacy = BeautifulSoup(efficacy_raw, "html.parser").get_text()[:500]
         
         return {
+            'date': permit_date, 
             'manu': manufacturer,
+            'ingr': ingredients,
             'effi': efficacy
         }
     except:
         return None
 
 def main():
-    print("=== 🌟 션 팀장님 지시: API 명세서 기반 '마지막 페이지' 공략 ===")
+    print("=== 🌟 션 팀장님 지시: 목록 날짜 무시 -> 상세 강제 검증 모드 가동 ===")
     
     list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
     
-    # [1단계] 전체 데이터 개수(totalCount) 확인 (정찰)
-    print(">> [정찰] 전체 데이터 개수를 파악하여 '끝 페이지'를 계산합니다...")
+    # [1단계] 전체 데이터 개수 파악
+    print(">> [정찰] 전체 데이터 개수 확인 중...")
     try:
-        # 파라미터 없이 요청하면 totalCount를 줍니다.
         res = requests.get(list_url, params={'serviceKey': API_KEY, 'numOfRows': '1', 'type': 'xml'}, timeout=10)
         root = ET.fromstring(res.text)
-        
-        total_count_str = root.findtext('.//totalCount')
-        if not total_count_str:
-            print("❌ API 응답 오류: totalCount를 찾을 수 없습니다.")
-            return
-            
-        total_count = int(total_count_str)
-        # 한 페이지에 100개씩 볼 때 마지막 페이지 계산
+        total_count = int(root.findtext('.//totalCount'))
         last_page = math.ceil(total_count / 100)
-        print(f">> 총 {total_count}건 발견. 최신 데이터는 {last_page}페이지에 있습니다.")
-        
+        print(f">> 총 {total_count}건. 최신 데이터는 {last_page}페이지에 위치합니다.")
     except Exception as e:
-        print(f"❌ 정찰 실패: {e}")
+        print(f"❌ 초기화 실패: {e}")
         return
 
-    # [2단계] 마지막 페이지부터 거꾸로(역순) 3페이지 스캔
-    # (최신 데이터가 뒤에 쌓이는 구조이므로 뒤에서부터 봐야 2026년 데이터가 나옴)
+    # [2단계] 마지막 페이지부터 역순으로 5페이지 스캔
     target_saved = 0
     
-    for page in range(last_page, last_page - 4, -1):
+    for page in range(last_page, last_page - 5, -1):
         if page < 1: break
         
-        print(f"\n>> [API] {page}페이지 (최신구간) 진입...")
-        
-        params = {
-            'serviceKey': API_KEY,
-            'pageNo': str(page),
-            'numOfRows': '100',
-            'type': 'xml'
-        }
+        print(f"\n>> [API] {page}페이지 데이터를 전수 검사합니다...")
         
         try:
+            params = {'serviceKey': API_KEY, 'pageNo': str(page), 'numOfRows': '100', 'type': 'xml'}
             res = requests.get(list_url, params=params, timeout=30)
             items = ET.fromstring(res.text).findall('.//item')
             
             if not items: continue
 
-            # 한 페이지 내에서도 순서가 섞여있을 수 있으니 역순 순회
+            # 역순 순회
             for item in reversed(items):
-                # [명세서 확인] 날짜 태그: ITEM_PERMIT_DATE
-                p_date = item.findtext('ITEM_PERMIT_DATE')
+                item_seq = item.findtext('ITEM_SEQ')
+                product_name = item.findtext('ITEM_NAME')
                 
-                if not p_date: continue
+                # [중요] 목록에 있는 날짜는 무시하고, 상세 API를 찔러서 진짜 날짜를 확인
+                detail = get_full_detail_and_date(item_seq)
                 
-                # 날짜 형식 통일 (YYYY-MM-DD -> YYYYMMDD)
-                p_date_clean = p_date.replace("-", "").replace(".", "")
+                # 상세 정보가 없거나 날짜가 없으면 패스
+                if not detail or not detail['date']:
+                    continue
                 
-                # 🎯 타겟: 2026년 2월 1일 이후 데이터
-                if p_date_clean >= "20260201":
-                    item_seq = item.findtext('ITEM_SEQ')
-                    product_name = item.findtext('ITEM_NAME')
-                    
-                    print(f"   -> [포착] {product_name} ({p_date_clean})")
-                    
-                    # [3단계] 상세 정보 보강 (효능, 위탁제조 등)
-                    detail = get_full_detail(item_seq)
-                    manu = detail['manu'] if detail else "정보없음"
-                    effi = detail['effi'] if detail else "상세참조"
-                    
-                    # [명세서 확인] 전문/일반 태그: SPCLTY_PBLC
-                    category_code = item.findtext('SPCLTY_PBLC') or "구분없음"
+                # 날짜 포맷 통일 (2026-02-01 -> 20260201)
+                real_date = detail['date'].replace("-", "").replace(".", "")
+                
+                # 🎯 타겟: 2026년 2월 1일 이후
+                if real_date >= "20260201":
+                    print(f"   -> [포착] {product_name} (허가일: {real_date})")
                     
                     data = {
                         "item_seq": item_seq,
                         "product_name": product_name,
                         "company": item.findtext('ENTP_NAME'),
-                        "manufacturer": manu,  # 상세API에서 온 값
-                        "category": category_code, # 명세서 태그 적용
+                        "manufacturer": detail['manu'],
+                        "category": item.findtext('SPCLTY_PBLC') or "구분없음",
                         "approval_type": item.findtext('PRDUCT_TYPE_NAME') or "정상",
-                        "ingredients": item.findtext('ITEM_INGR_NAME') or "성분정보없음", # 목록API에도 성분이 있음!
-                        "efficacy": effi,      # 상세API에서 온 값
-                        "approval_date": p_date,
+                        "ingredients": detail['ingr'],
+                        "efficacy": detail['effi'],
+                        "approval_date": real_date,
                         "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
                     }
                     
                     supabase.table("drug_approvals").upsert(data).execute()
                     target_saved += 1
-                    time.sleep(0.05) 
+                    time.sleep(0.05) # API 호출 간격
                 
-                elif p_date_clean < "20260201":
-                    # 1월 데이터가 나오면 일단 패스 (페이지 전체를 확인하되 로그만 남김)
-                    pass
+                # 2025년 데이터가 나오면 너무 멀리 온 것이므로 종료 (최적화)
+                elif real_date < "20260101":
+                    print(">> 2025년 데이터 발견. 더 이상의 과거 데이터 수집을 중단합니다.")
+                    print(f"\n=== 🏆 최종 결과: 총 {target_saved}건(목표 43건) 저장 완료! ===")
+                    return
 
         except Exception as e:
-            print(f"⚠️ 페이지 처리 중 오류: {e}")
+            print(f"⚠️ 페이지 처리 오류: {e}")
             continue
 
-    print(f"\n=== 🏆 작전 성공: 총 {target_saved}건의 최신 데이터를 확보했습니다! ===")
+    print(f"\n=== 🏆 작전 종료: 총 {target_saved}건 저장 완료! ===")
 
 if __name__ == "__main__":
     main()
