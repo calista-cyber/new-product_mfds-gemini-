@@ -3,8 +3,9 @@ from bs4 import BeautifulSoup
 import os
 from supabase import create_client, Client
 from datetime import datetime, timedelta
+import time
 
-# 1. Supabase 연결
+# 1. Supabase 연결 설정
 URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 
@@ -21,9 +22,8 @@ def get_detail_info(item_seq):
         res = requests.get(detail_url, headers={'User-Agent': 'Mozilla/5.0'})
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 위탁제조업체 (제조/수입사 정보 찾기)
+        # 위탁제조업체
         manufacturer = ""
-        # '위탁제조업체' 또는 '수탁자'라는 텍스트가 포함된 th 찾기
         mf_tag = soup.find('th', string=lambda t: t and ('위탁' in t or '수탁' in t))
         if mf_tag:
              manufacturer = mf_tag.find_next('td').get_text(strip=True)
@@ -41,7 +41,7 @@ def get_detail_info(item_seq):
         efficacy = ""
         eff_div = soup.select_one('div#scroll_03')
         if eff_div:
-            efficacy = eff_div.get_text(strip=True)[:300] # 300자 제한
+            efficacy = eff_div.get_text(strip=True)[:300] 
 
         return manufacturer, ingredients_str, efficacy
 
@@ -50,90 +50,109 @@ def get_detail_info(item_seq):
         return "", "", ""
 
 def main():
-    print("=== 크롤링 시작 ===")
+    print("=== 크롤링 시작 (페이지 순회 모드) ===")
     
-    # 최근 목록 조회
-    list_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01" 
-    try:
-        res = requests.get(list_url, headers={'User-Agent': 'Mozilla/5.0'})
-        soup = BeautifulSoup(res.text, 'html.parser')
-    except Exception as e:
-        print(f"목록 페이지 접속 실패: {e}")
-        return
-
-    rows = soup.select('table.board_list tbody tr')
-    print(f"총 {len(rows)}개의 행을 발견했습니다.")
+    url = "https://nedrug.mfds.go.kr/pbp/CCBAE01"
     
-    saved_count = 0
-
-    for i, row in enumerate(rows):
-        cols = row.find_all('td')
-        if not cols or len(cols) < 5:
-            continue
-
-        # [디버깅] 첫 번째 줄의 데이터를 출력해봅니다 (컬럼 위치 확인용)
-        if i == 0:
-            print(f"첫 번째 행 데이터 샘플: {[c.get_text(strip=True) for c in cols]}")
-
-        # [수정 포인트] 취소/취하 일자는 보통 7번째 칸 (인덱스 6)에 있습니다.
-        # 인덱스 5는 '품목기준코드'라서 항상 값이 있습니다.
-        cancel_date = ""
-        if len(cols) > 6:
-            cancel_date = cols[6].get_text(strip=True)
+    # 오늘 날짜와 7일 전 날짜 계산
+    today = datetime.now()
+    week_ago = today - timedelta(days=7) # 일주일치 데이터 검색
+    
+    current_page = 1
+    total_saved = 0
+    
+    while True:
+        print(f"\n>> [ {current_page} 페이지 ] 읽는 중...")
         
-        product_name = cols[1].get_text(strip=True)
-
-        if cancel_date:
-            print(f"SKIP (취소됨): {product_name}")
-            continue
-
-        # 데이터 추출
+        # 페이지 번호(page)를 포함하여 요청
+        payload = {
+            "searchYn": "true",
+            "page": current_page, 
+            "startDate": week_ago.strftime("%Y-%m-%d"),
+            "endDate": today.strftime("%Y-%m-%d"),
+        }
+        
         try:
-            # 보통 Nedrug 목록: 0:순번, 1:품목명, 2:업체명, 3:허가유형, 4:허가일자, 5:코드, 6:취소일자
-            
-            # 정확한 매핑 (표 구조 기반)
-            product_name = cols[1].get_text(strip=True)
-            company = cols[2].get_text(strip=True)
-            approval_type = cols[3].get_text(strip=True)
-            approval_date = cols[4].get_text(strip=True)
-            
-            # itemSeq 추출
-            onclick = cols[1].find('a')['onclick'] # view('2023...')
-            item_seq = onclick.split("'")[1]
-            
-            detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
+            res = requests.post(url, data=payload, headers={'User-Agent': 'Mozilla/5.0'})
+            soup = BeautifulSoup(res.text, 'html.parser')
+        except Exception as e:
+            print(f"페이지 접속 실패: {e}")
+            break
 
-            # 중복 체크
-            exists = supabase.table("drug_approvals").select("item_seq").eq("item_seq", item_seq).execute()
-            if exists.data:
-                print(f"SKIP (이미 있음): {product_name}")
+        # 테이블 행 가져오기
+        rows = soup.select('table.board_list tbody tr')
+        
+        # [종료 조건] 데이터가 없거나, "데이터가 없습니다" 텍스트가 나오면 종료
+        if not rows or (len(rows) == 1 and "데이터가" in rows[0].get_text()):
+            print("더 이상 데이터가 없습니다. 크롤링을 종료합니다.")
+            break
+
+        page_saved_count = 0
+
+        for row in rows:
+            cols = row.find_all('td')
+            if not cols or len(cols) < 5:
                 continue
 
-            print(f">> 신규 데이터 수집 중: {product_name}...")
-            
-            manufacturer, ingredients, efficacy = get_detail_info(item_seq)
+            # 취소/취하 일자 확인 (인덱스 6)
+            cancel_date = cols[6].get_text(strip=True) if len(cols) > 6 else ""
+            product_name = cols[1].get_text(strip=True)
 
-            data = {
-                "item_seq": item_seq,
-                "product_name": product_name,
-                "company": company,
-                "manufacturer": manufacturer,
-                "category": "", # 목록에 없으면 빈값
-                "approval_type": approval_type,
-                "ingredients": ingredients,
-                "efficacy": efficacy,
-                "approval_date": approval_date,
-                "detail_url": detail_url
-            }
+            if cancel_date:
+                print(f"SKIP (취소됨): {product_name}")
+                continue
 
-            supabase.table("drug_approvals").upsert(data).execute()
-            saved_count += 1
+            try:
+                # 데이터 추출
+                company = cols[2].get_text(strip=True)
+                approval_date = cols[3].get_text(strip=True)
+                
+                onclick = cols[1].find('a')['onclick'] 
+                item_seq = onclick.split("'")[1]
+                detail_url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
 
-        except Exception as e:
-            print(f"데이터 처리 중 에러 ({product_name}): {e}")
-            continue
+                # 중복 체크
+                exists = supabase.table("drug_approvals").select("item_seq").eq("item_seq", item_seq).execute()
+                if exists.data:
+                    print(f"SKIP (이미 있음): {product_name}")
+                    continue
 
-    print(f"=== 크롤링 완료: 총 {saved_count}건 저장됨 ===")
+                print(f" + 수집: {product_name}")
+                
+                manufacturer, ingredients, efficacy = get_detail_info(item_seq)
+
+                data = {
+                    "item_seq": item_seq,
+                    "product_name": product_name,
+                    "company": company,
+                    "manufacturer": manufacturer,
+                    "category": "", 
+                    "approval_type": "",
+                    "ingredients": ingredients,
+                    "efficacy": efficacy,
+                    "approval_date": approval_date,
+                    "detail_url": detail_url
+                }
+
+                supabase.table("drug_approvals").upsert(data).execute()
+                page_saved_count += 1
+                total_saved += 1
+                
+                # 서버 부하 방지를 위해 아주 살짝 대기
+                time.sleep(0.1)
+
+            except Exception as e:
+                print(f"에러 발생 ({product_name}): {e}")
+                continue
+        
+        # 이번 페이지에서 저장한 게 없고 모두 중복/취소라면? (그래도 다음 페이지 확인 필요)
+        print(f"   -> {current_page}페이지 완료 ({page_saved_count}건 저장)")
+        
+        # 다음 페이지로 이동
+        current_page += 1
+        time.sleep(0.5) # 페이지 넘길 때 대기
+
+    print(f"\n=== 최종 완료: 총 {total_saved}건 신규 저장됨 ===")
 
 if __name__ == "__main__":
     main()
