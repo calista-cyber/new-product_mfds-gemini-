@@ -12,10 +12,9 @@ URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
-def get_full_detail_and_date(item_seq):
+def get_detail_and_date(item_seq):
     """
-    [상세 API] 날짜, 성분, 효능 등 모든 핵심 정보를 가져옵니다.
-    목록 API가 날짜를 안 줘도, 여기서 확실하게 알아낼 수 있습니다.
+    [상세 API] 목록에서 날짜가 안 보여도, 상세 API를 찔러서 진짜 날짜와 정보를 가져옵니다.
     """
     url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {'serviceKey': API_KEY, 'item_seq': item_seq, 'numOfRows': '1', 'type': 'xml'}
@@ -45,7 +44,7 @@ def get_full_detail_and_date(item_seq):
         return None
 
 def main():
-    print("=== 🌟 션 팀장님 지시: 목록 날짜 무시 -> 상세 강제 검증 모드 가동 ===")
+    print("=== 🌙 션 팀장님 굿나잇 프로젝트: 상세 강제 검증 모드 시작 ===")
     
     list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
     
@@ -76,13 +75,13 @@ def main():
             
             if not items: continue
 
-            # 역순 순회
+            # 역순 순회 (최신순)
             for item in reversed(items):
                 item_seq = item.findtext('ITEM_SEQ')
                 product_name = item.findtext('ITEM_NAME')
                 
-                # [중요] 목록에 있는 날짜는 무시하고, 상세 API를 찔러서 진짜 날짜를 확인
-                detail = get_full_detail_and_date(item_seq)
+                # [중요] 상세 API를 찔러서 진짜 날짜를 확인
+                detail = get_detail_and_date(item_seq)
                 
                 # 상세 정보가 없거나 날짜가 없으면 패스
                 if not detail or not detail['date']:
@@ -110,12 +109,13 @@ def main():
                     
                     supabase.table("drug_approvals").upsert(data).execute()
                     target_saved += 1
-                    time.sleep(0.05) # API 호출 간격
+                    # API 호출 부하 조절
+                    time.sleep(0.05) 
                 
-                # 2025년 데이터가 나오면 너무 멀리 온 것이므로 종료 (최적화)
+                # 2025년 데이터가 나오면 너무 멀리 온 것이므로 종료
                 elif real_date < "20260101":
-                    print(">> 2025년 데이터 발견. 더 이상의 과거 데이터 수집을 중단합니다.")
-                    print(f"\n=== 🏆 최종 결과: 총 {target_saved}건(목표 43건) 저장 완료! ===")
+                    print(">> 2025년 데이터 발견. 수집을 종료하고 퇴근합니다.")
+                    print(f"\n=== 🏆 최종 결과: 총 {target_saved}건 저장 완료! 꿀잠 주무세요! ===")
                     return
 
         except Exception as e:
