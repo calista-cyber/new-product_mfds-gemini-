@@ -49,21 +49,24 @@ def main():
     
     # 세션 유지를 위한 객체 생성
     session = requests.Session()
+    # 봇 차단을 피하기 위한 완벽한 브라우저 위장 헤더
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01'
+        'Referer': 'https://nedrug.mfds.go.kr/pbp/CCBAE01',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
     }
     
     # [1단계] 메인 페이지 먼저 방문하여 '입장권(Cookie)' 획득
     print(">> [입장] 식약처 로비(메인페이지)에서 통행증 발급 중...")
     try:
         session.get("https://nedrug.mfds.go.kr/pbp/CCBAE01", headers=headers, timeout=30)
-        time.sleep(1) # 도장 찍는 시간 대기
+        time.sleep(2) # 도장 찍는 시간 충분히 대기
     except Exception as e:
         print(f"⚠️ 메인 페이지 접속 실패: {e}")
         return
 
-    # [2단계] 팀장님이 확인하신 파라미터 그대로 목록 요청
+    # [2단계] 팀장님이 확인하신 URL 파라미터 그대로 목록 요청
     target_url = "https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro"
     total_saved = 0
     
@@ -71,10 +74,10 @@ def main():
     for page in range(1, 6): 
         print(f"\n>> [Web] {page}페이지 목록 스캔 중...")
         
-        # 팀장님의 브라우저 URL 파라미터 완벽 복제
+        # 팀장님의 브라우저 URL 파라미터 완벽 복제 (빈 값도 그대로 유지)
         params = {
             'page': page,
-            'limit': '10',
+            'limit': '', # 중요: 브라우저처럼 빈 값으로 보냄
             'sort': '',
             'sortOrder': 'true',
             'searchYn': 'true',
@@ -82,8 +85,8 @@ def main():
             'sYear': '2026',
             'sMonth': '2',
             'sWeek': '2', 
-            'sPermitDateStart': '2026-02-01', # 팀장님 설정 날짜
-            'sPermitDateEnd': '2026-02-14',   # 팀장님 설정 날짜
+            'sPermitDateStart': '2026-02-01', # 시작일
+            'sPermitDateEnd': '2026-02-14',   # 종료일
             'btnSearch': '',
             'garaInputBox': '' 
         }
@@ -94,6 +97,7 @@ def main():
             soup = BeautifulSoup(res.text, 'html.parser')
             rows = soup.select('table.board_list tbody tr')
 
+            # 데이터가 없거나 '데이터가 없습니다' 문구가 뜨면 종료
             if not rows or "데이터가" in rows[0].text:
                 print(">> 더 이상 데이터가 없습니다. (수집 종료)")
                 break
@@ -111,7 +115,7 @@ def main():
                 
                 print(f"   -> [발견] {product_name} ({item_seq})")
                 
-                # [3단계] API로 빈칸(성분/제조원) 채우기
+                # [3단계] API로 빈칸(성분/제조원) 채우기 (하이브리드 전략)
                 manufacturer, ingredients, efficacy = get_api_detail(item_seq)
 
                 data = {
