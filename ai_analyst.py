@@ -1,7 +1,7 @@
 import os
 import time
 import json
-import google.generativeai as genai
+from google import genai # 🌟 구글의 최신 라이브러리 호출
 from supabase import create_client, Client
 
 # 1. 설정
@@ -10,10 +10,9 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
 
-# 🌟 [해결책] Python 3.10 환경에서는 이 '표준 모델'이 가장 확실하게 작동합니다.
-model = genai.GenerativeModel('gemini-pro')
+# 🌟 [New SDK] 클라이언트 연결 방식 변경
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 def ask_gemini(product_name, ingredients):
     prompt = f"""
@@ -30,7 +29,13 @@ def ask_gemini(product_name, ingredients):
     {{"category": "...", "summary": "..."}}
     """
     try:
-        response = model.generate_content(prompt)
+        # 🌟 [New SDK] 명령어 변경: models.generate_content
+        response = client.models.generate_content(
+            model='gemini-1.5-flash', # 최신 모델 사용
+            contents=prompt
+        )
+        
+        # 응답 처리
         text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except Exception as e:
@@ -38,7 +43,7 @@ def ask_gemini(product_name, ingredients):
         return None
 
 def main():
-    print("=== 🤖 AI 약품 분석관(Gemini-Pro) 출근했습니다! ===")
+    print("=== 🤖 AI 약품 분석관(New SDK: 1.5-Flash) 출근했습니다! ===")
     
     # 분석 안 된 것 가져오기
     response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
