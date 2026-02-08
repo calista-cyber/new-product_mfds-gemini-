@@ -1,7 +1,7 @@
 import os
 import time
 import json
-import requests # 🌟 라이브러리 대신 직접 요청 도구 사용
+import requests
 from supabase import create_client, Client
 
 # 1. 설정
@@ -12,9 +12,14 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def ask_gemini(product_name, ingredients):
-    # 🌟 [직통 연결] 라이브러리 없이 URL로 직접 요청 (가장 확실함)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
+    # 🌟 [전략] 3가지 모델을 순서대로 다 찔러봅니다. (하나라도 되면 성공!)
+    candidate_models = [
+        "gemini-1.5-flash",       # 1순위: 최신형
+        "gemini-1.5-flash-001",   # 2순위: 최신형(정식명칭)
+        "gemini-pro",             # 3순위: 구형이지만 가장 안정적
+        "gemini-1.0-pro"          # 4순위: 최후의 보루
+    ]
+
     prompt = f"""
     너는 제약 전문가야. 아래 의약품 정보를 보고 JSON 형식으로 답변해.
     
@@ -30,32 +35,38 @@ def ask_gemini(product_name, ingredients):
     """
     
     payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
+        "contents": [{"parts": [{"text": prompt}]}]
     }
-    
-    try:
-        response = requests.post(url, json=payload)
+
+    # 🔄 모델 리스트를 돌면서 시도
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         
-        # 에러 체크
-        if response.status_code != 200:
-            print(f"⚠️ API 오류: {response.text}")
-            return None
+        try:
+            response = requests.post(url, json=payload, timeout=10)
             
-        result = response.json()
-        text = result['candidates'][0]['content']['parts'][0]['text']
-        
-        # JSON 정리
-        text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
-        
-    except Exception as e:
-        print(f"🤖 AI 분석 실패 ({product_name}): {e}")
-        return None
+            # 성공(200)하면 바로 결과 반환하고 탈출!
+            if response.status_code == 200:
+                result = response.json()
+                try:
+                    text = result['candidates'][0]['content']['parts'][0]['text']
+                    text = text.replace("```json", "").replace("```", "").strip()
+                    return json.loads(text)
+                except (KeyError, IndexError):
+                    continue # 응답은 왔는데 내용이 이상하면 다음 모델로
+            
+            # 404나 400 에러면 다음 모델 시도
+            # print(f"   (시도중) {model_name} 실패.. 다음 모델 검색")
+            
+        except Exception:
+            continue
+
+    # 모든 모델이 다 실패했을 때
+    print(f"⚠️ 모든 AI 모델 접속 실패 ({product_name}) - API KEY를 확인하세요.")
+    return None
 
 def main():
-    print("=== 🤖 AI 약품 분석관(REST API Direct) 출근했습니다! ===")
+    print("=== 🤖 AI 약품 분석관(Multi-Model Try) 출근했습니다! ===")
     
     # 분석 안 된 것 가져오기
     response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
@@ -67,6 +78,7 @@ def main():
 
     print(f">> 분석할 대기열: {len(drugs)}건 발견")
     
+    count = 0
     for drug in drugs:
         seq = drug['item_seq']
         name = drug['product_name']
@@ -81,9 +93,10 @@ def main():
             }).eq("item_seq", seq).execute()
             
             print(f"   ✅ [{name}] 분류: {ai_result.get('category')} | 요약 완료")
+            count += 1
             time.sleep(1) # 과부하 방지
 
-    print("=== 🏆 AI 분석 완료! ===")
+    print(f"=== 🏆 총 {count}건 AI 분석 완료! ===")
 
 if __name__ == "__main__":
     main()
