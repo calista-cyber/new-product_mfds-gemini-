@@ -12,13 +12,12 @@ jobs:
       - name: 1. 코드 체크아웃
         uses: actions/checkout@v3
 
-      - name: 2. 파이썬 설정 (버전 3.10으로 고정)
+      - name: 2. 파이썬 설정 (3.11로 업그레이드!)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' 
+          python-version: '3.11'  # 🌟 여기를 3.11로 바꾸면 경고 끝!
 
-      - name: 3. 라이브러리 강제 업데이트
-        # -U 옵션을 써서 무조건 최신 버전을 깔도록 합니다.
+      - name: 3. 라이브러리 설치
         run: |
           pip install -U requests beautifulsoup4 supabase google-generativeai
 
