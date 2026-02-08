@@ -10,22 +10,27 @@ st.set_page_config(page_title="신규 의약품 허가 현황", layout="wide")
 # 2. Supabase 연결
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception:
+        return None
 
-try:
-    supabase = init_connection()
-except Exception as e:
-    st.error("DB 연결 실패. Secrets 설정을 확인해주세요.")
+supabase = init_connection()
+
+if not supabase:
+    st.error("DB 연결 실패. Streamlit Secrets에 SUPABASE_URL과 SUPABASE_KEY를 설정해주세요.")
     st.stop()
 
 # 3. 데이터 불러오기 함수
 def load_data():
     # 최근 허가일자 순으로 가져오기
-    response = supabase.table("drug_approvals").select("*").order("approval_date", desc=True).execute()
-    df = pd.DataFrame(response.data)
-    return df
+    try:
+        response = supabase.table("drug_approvals").select("*").order("approval_date", desc=True).execute()
+        return pd.DataFrame(response.data)
+    except Exception:
+        return pd.DataFrame()
 
 # --- UI 시작: 메인 목록 ---
 st.title("💊 신규 의약품 허가 현황")
@@ -45,9 +50,9 @@ try:
     if df.empty:
         st.info("아직 수집된 데이터가 없습니다. GitHub Actions에서 'Run workflow'를 실행해보세요.")
     else:
-        # [중요] DB 영어 컬럼명을 -> 한글로 변경 (사용자 보기 편하게)
-        # ai_category와 ai_summary가 있다면 포함, 없으면 무시
+        # [중요] DB 영어 컬럼명을 -> 한글로 변경
         rename_dict = {
+            "item_seq": "품목기준코드",    # 🌟 팀장님 요청 반영 완료!
             "approval_date": "허가일자",
             "product_name": "제품명",
             "company": "업체명",
@@ -55,8 +60,8 @@ try:
             "approval_type": "허가유형",
             "ingredients": "성분명",
             "efficacy": "효능효과",
-            "ai_category": "AI분류",      # 추가된 AI 데이터
-            "ai_summary": "AI요약",        # 추가된 AI 데이터
+            "ai_category": "AI분류",
+            "ai_summary": "AI요약",
             "detail_url": "링크"
         }
         
@@ -68,10 +73,11 @@ try:
             with col_s1:
                 search_name = st.text_input("제품명으로 검색")
             with col_s2:
-                # AI 분류가 있다면 필터 제공
                 if "AI분류" in df_display.columns:
                     unique_cats = ["전체"] + list(df_display["AI분류"].unique())
                     selected_cat = st.selectbox("효능군 필터 (AI)", unique_cats)
+                else:
+                    selected_cat = "전체"
 
         # 필터 적용 logic
         if search_name:
@@ -88,6 +94,8 @@ try:
                 "링크": st.column_config.LinkColumn(
                     "상세보기", display_text="식약처 바로가기"
                 ),
+                # 품목기준코드는 숫자가 아니라 문자로 보이게 설정 (콤마 제거)
+                "품목기준코드": st.column_config.TextColumn("품목기준코드"),
             },
             hide_index=True,
             use_container_width=True
@@ -109,7 +117,7 @@ except Exception as e:
     st.error(f"데이터 로드 중 오류: {e}")
 
 # --- 💰 HA_money : 돈이 되는 수다 (게시판 기능) ---
-st.divider() # 구분선 추가
+st.divider() 
 st.markdown("### 💰 HA_money : 돈이 되는 수다")
 st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요! (익명 보장)")
 
@@ -125,19 +133,18 @@ with st.form("ha_money_form", clear_on_submit=True):
     
     if submit_btn and content:
         try:
-            # DB에 저장
             new_comment = {
                 "user_nickname": nickname if nickname else "익명",
                 "content": content
             }
             supabase.table("ha_money").insert(new_comment).execute()
             st.success("소중한 정보가 등록되었습니다! 💸")
-            time.sleep(1) # 잠시 보여주고
-            st.rerun()    # 새로고침
+            time.sleep(1) 
+            st.rerun()    
         except Exception as e:
             st.error(f"등록 실패: {e}")
 
-# 2. 댓글 목록 보여주기 (최신순 20개)
+# 2. 댓글 목록 보여주기
 try:
     response = supabase.table("ha_money").select("*").order("created_at", desc=True).limit(20).execute()
     comments = response.data
@@ -146,4 +153,12 @@ try:
         for chat in comments:
             with st.chat_message("user"):
                 st.write(f"**{chat['user_nickname']}**: {chat['content']}")
-                # 날짜 예쁘게 자르기 (2026-02-08T10:00...
+                # 날짜 자르기
+                date_str = chat['created_at'][:16].replace("T", " ")
+                st.caption(f"{date_str}")
+    else:
+        st.text("아직 등록된 글이 없습니다. 팀장님의 첫 의견을 남겨주세요!")
+
+except Exception as e:
+    # 테이블이 없을 때를 대비한 안내 메시지
+    st.warning("게시판 데이터를 불러오는 중입니다. (잠시 후 다시 시도해주세요)")
