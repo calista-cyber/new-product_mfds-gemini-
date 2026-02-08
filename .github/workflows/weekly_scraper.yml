@@ -12,14 +12,14 @@ jobs:
       - name: 1. 코드 체크아웃
         uses: actions/checkout@v3
 
-      - name: 2. 파이썬 설정 (3.11로 업그레이드!)
+      - name: 2. 파이썬 설정 (3.11 사용)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'  # 🌟 여기를 3.11로 바꾸면 경고 끝!
+          python-version: '3.11'
 
-      - name: 3. 라이브러리 설치
+      - name: 3. 라이브러리 설치 (✨ Google의 새로운 'genai' 라이브러리 설치)
         run: |
-          pip install -U requests beautifulsoup4 supabase google-generativeai
+          pip install -U requests beautifulsoup4 supabase google-genai
 
       - name: 4. 데이터 수집 (Scraper)
         env:
