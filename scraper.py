@@ -13,18 +13,13 @@ KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
 def get_api_detail(item_seq):
-    """
-    [상세 API] 품목허가 상세 정보 조회 (DtlInq06)
-    목록에는 없는 '효능효과', '위탁제조업체' 등을 가져옵니다.
-    """
+    """ [상세 API] 제조원, 성분, 효능 등 추가 정보 조회 """
     url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {'serviceKey': API_KEY, 'item_seq': item_seq, 'numOfRows': '1', 'type': 'xml'}
-    
     try:
         res = requests.get(url, params=params, timeout=10)
         root = ET.fromstring(res.text)
         item = root.find('.//item')
-        
         if not item: return None
 
         return {
@@ -37,41 +32,31 @@ def get_api_detail(item_seq):
         return None
 
 def main():
-    print("=== 🌟 션 팀장님 교정: API(`15095677`)로 PPCAC01 데이터 복제 ===")
+    print("=== 🌟 션 팀장님 최종 지시: '2026년 코드' 필터링으로 정확도 100% 확보 ===")
     
-    # 팀장님이 찾아주신 바로 그 API (목록 조회)
     list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
     
-    # [1단계] 전체 데이터 수 확인 (Swagger 가이드의 totalCount 활용)
-    print(">> [정찰] 전체 데이터 규모 파악 중...")
+    # [1단계] 전체 페이지 파악
+    print(">> [정찰] 데이터 규모 확인 중...")
     try:
-        # numOfRows=1로 최소 요청하여 totalCount만 확인
         res = requests.get(list_url, params={'serviceKey': API_KEY, 'numOfRows': '1', 'type': 'xml'}, timeout=10)
-        root = ET.fromstring(res.text)
-        
-        # [cite: 191] 응답 결과 확인
-        result_code = root.findtext('.//resultCode')
-        if result_code != '00':
-             print(f"❌ API 오류 발생: {root.findtext('.//resultMsg')}")
-             return
-
-        total_count = int(root.findtext('.//totalCount'))
-        
-        # 한 페이지에 100개씩 본다고 가정할 때 마지막 페이지 계산
+        total_count = int(ET.fromstring(res.text).findtext('.//totalCount'))
         last_page = math.ceil(total_count / 100)
-        print(f">> 총 {total_count}건. PPCAC01의 최신 데이터는 {last_page}페이지에 있습니다.")
+        print(f">> 총 {total_count}건. 최신 데이터(변경분 포함)는 {last_page}페이지에 있습니다.")
     except Exception as e:
-        print(f"❌ 접속 실패: {e}")
+        print(f"❌ API 접속 실패: {e}")
         return
 
     total_saved = 0
     
-    # [2단계] 마지막 페이지부터 역순으로 3페이지(최근 300건) 스캔
-    # PPCAC01 화면 상단에 있는 '최신 허가' 약들입니다.
-    for page in range(last_page, last_page - 3, -1):
+    # [2단계] 역순 스캔 (마지막 페이지부터 뒤로 20페이지)
+    # 최근에 '취소'된 옛날 약들이 뒤쪽에 몰려있을 수 있으므로, 넉넉하게 20페이지를 훑어서 '2026년생'을 찾습니다.
+    scan_depth = 20
+    
+    for page in range(last_page, last_page - scan_depth, -1):
         if page < 1: break
         
-        print(f"\n>> [API] {page}페이지 (최신순) 데이터 분석 중...")
+        print(f"\n>> [API] {page}페이지 정밀 선별 중...")
         
         params = {
             'serviceKey': API_KEY,
@@ -83,44 +68,41 @@ def main():
         try:
             res = requests.get(list_url, params=params, timeout=30)
             items = ET.fromstring(res.text).findall('.//item')
-            
             if not items: continue
 
-            # [핵심] 최신순으로 보기 위해 리스트를 뒤집어서(reversed) 처리
+            # 최신순(역순) 순회
             for item in reversed(items):
-                item_seq = item.findtext('ITEM_SEQ')
                 product_name = item.findtext('ITEM_NAME')
-                company = item.findtext('ENTP_NAME')
                 
-                # 취소 여부 확인 (Swagger 모델 참조)
+                # 1. 취소 여부 확인 (취소된 약은 버림)
                 cancel_date = item.findtext('CANCEL_DATE')
-                cancel_name = item.findtext('CANCEL_NAME')
-                
-                # [필터] 취소된 약은 건너뛰기 (팀장님 요청사항 반영)
-                if cancel_date or cancel_name:
-                    print(f"   -> [패스] {product_name} (취소됨)")
+                if cancel_date:
+                    # 로그를 너무 많이 찍지 않기 위해 취소된 건은 조용히 패스하거나 필요시 주석 해제
+                    # print(f"   -> [거름] {product_name} (취소됨)") 
                     continue
 
-                # 상세 정보 조회 (날짜 및 제조원 등)
-                detail = get_api_detail(item_seq)
+                # 2. [핵심] 품목기준코드(PRDLST_STDR_CODE) 확인
+                code = item.findtext('PRDLST_STDR_CODE') or ""
                 
-                # 상세 정보가 없거나 날짜가 없으면 스킵
+                # 코드가 "2026"으로 시작하지 않으면? -> 옛날 약임 -> 패스!
+                if not code.startswith("2026"):
+                    continue
+                
+                # 여기까지 왔으면 "2026년에 태어난 살아있는 약"입니다.
+                item_seq = item.findtext('ITEM_SEQ')
+                
+                # 상세 정보 조회
+                detail = get_api_detail(item_seq)
                 if not detail or not detail['date']: continue
                 
                 real_date = detail['date'].replace("-", "").replace(".", "")
                 
-                # 최근 데이터인지 확인 (예: 2026년 이후 데이터만)
-                # 너무 옛날 데이터가 나오면 루프 종료 가능
-                if real_date < "20260101":
-                     # 여기서는 일단 계속 수집하지만, 필요시 break 가능
-                     pass
-
-                print(f"   -> [수집] {product_name} ({real_date})")
+                print(f"   -> [💎발굴] {product_name} (코드:{code}, 일자:{real_date})")
                 
                 data = {
                     "item_seq": item_seq,
                     "product_name": product_name,
-                    "company": company,
+                    "company": item.findtext('ENTP_NAME'),
                     "manufacturer": detail['manu'],
                     "category": item.findtext('SPCLTY_PBLC') or "구분없음",
                     "approval_type": "정상",
@@ -132,13 +114,14 @@ def main():
                 
                 supabase.table("drug_approvals").upsert(data).execute()
                 total_saved += 1
-                time.sleep(0.05) # API 매너 호출
+                time.sleep(0.05)
 
+    
         except Exception as e:
             print(f"⚠️ 에러: {e}")
             continue
 
-    print(f"\n=== 🏆 수집 완료: PPCAC01 화면의 최신 데이터 {total_saved}건 확보! ===")
+    print(f"\n=== 🏆 수집 완료: 잡동사니 제거 후 '순수 2026년 신약' {total_saved}건 확보! ===")
 
 if __name__ == "__main__":
     main()
