@@ -1,7 +1,7 @@
 import os
 import time
 import json
-from google import genai
+import requests # 🌟 라이브러리 대신 직접 요청 도구 사용
 from supabase import create_client, Client
 
 # 1. 설정
@@ -10,9 +10,11 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 def ask_gemini(product_name, ingredients):
+    # 🌟 [직통 연결] 라이브러리 없이 URL로 직접 요청 (가장 확실함)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
     prompt = f"""
     너는 제약 전문가야. 아래 의약품 정보를 보고 JSON 형식으로 답변해.
     
@@ -26,22 +28,36 @@ def ask_gemini(product_name, ingredients):
     [출력형식]
     {{"category": "...", "summary": "..."}}
     """
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+    
     try:
-        # 🌟 [수정] 가장 확실한 정식 모델명 사용 (gemini-1.5-flash-001)
-        response = client.models.generate_content(
-            model='gemini-1.5-flash-001', 
-            contents=prompt
-        )
+        response = requests.post(url, json=payload)
         
-        text = response.text.replace("```json", "").replace("```", "").strip()
+        # 에러 체크
+        if response.status_code != 200:
+            print(f"⚠️ API 오류: {response.text}")
+            return None
+            
+        result = response.json()
+        text = result['candidates'][0]['content']['parts'][0]['text']
+        
+        # JSON 정리
+        text = text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
+        
     except Exception as e:
         print(f"🤖 AI 분석 실패 ({product_name}): {e}")
         return None
 
 def main():
-    print("=== 🤖 AI 약품 분석관(New SDK: Flash-001) 출근했습니다! ===")
+    print("=== 🤖 AI 약품 분석관(REST API Direct) 출근했습니다! ===")
     
+    # 분석 안 된 것 가져오기
     response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
     drugs = response.data
     
@@ -65,7 +81,7 @@ def main():
             }).eq("item_seq", seq).execute()
             
             print(f"   ✅ [{name}] 분류: {ai_result.get('category')} | 요약 완료")
-            time.sleep(1)
+            time.sleep(1) # 과부하 방지
 
     print("=== 🏆 AI 분석 완료! ===")
 
