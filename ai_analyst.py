@@ -12,8 +12,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 🌟 [수정됨] 가장 안정적인 'gemini-pro' 모델 사용
-model = genai.GenerativeModel('gemini-pro')
+# 🌟 [복구] 최신 환경에서는 이 모델이 가장 빠르고 정확합니다.
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 def ask_gemini(product_name, ingredients):
     prompt = f"""
@@ -38,8 +38,9 @@ def ask_gemini(product_name, ingredients):
         return None
 
 def main():
-    print("=== 🤖 AI 약품 분석관(Gemini-Pro) 출근했습니다! ===")
+    print("=== 🤖 AI 약품 분석관(Gemini-1.5-Flash) 출근했습니다! ===")
     
+    # 분석 안 된 것 가져오기
     response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
     drugs = response.data
     
@@ -63,7 +64,7 @@ def main():
             }).eq("item_seq", seq).execute()
             
             print(f"   ✅ [{name}] 분류: {ai_result.get('category')} | 요약 완료")
-            time.sleep(1) 
+            time.sleep(1) # 과부하 방지
 
     print("=== 🏆 AI 분석 완료! ===")
 
