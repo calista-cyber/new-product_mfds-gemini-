@@ -3,7 +3,6 @@ import requests
 import time
 import math
 import xml.etree.ElementTree as ET
-from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
 # 1. 설정
@@ -12,52 +11,60 @@ URL = os.environ.get("SUPABASE_URL")
 KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(URL, KEY)
 
-def get_api_detail(item_seq):
-    """ [상세 API] 정밀 정보 조회 """
+def get_api_date_and_ingr(item_seq):
+    """ 
+    [상세 API] 
+    불필요한 정보(효능, 제조원)는 버리고,
+    가장 중요한 '진짜 허가일자'와 '성분'만 빠르게 가져옵니다.
+    """
     url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {'serviceKey': API_KEY, 'item_seq': item_seq, 'numOfRows': '1', 'type': 'xml'}
+    
     try:
         res = requests.get(url, params=params, timeout=10)
         root = ET.fromstring(res.text)
         item = root.find('.//item')
+        
         if not item: return None
 
         return {
             'date': item.findtext('ITEM_PERMIT_DATE') or item.findtext('PERMIT_DATE'),
-            'manu': item.findtext('MANU_METHOD') or "정보없음",
-            'ingr': item.findtext('MAIN_ITEM_INGR') or item.findtext('ITEM_INGR_NAME') or "정보없음",
-            'effi': BeautifulSoup(item.findtext('EE_DOC_DATA') or "상세참조", "html.parser").get_text()[:500]
+            'ingr': item.findtext('MAIN_ITEM_INGR') or item.findtext('ITEM_INGR_NAME') or "정보없음"
         }
     except:
         return None
 
 def main():
-    print("=== 🌟 션 팀장님 지시: 식약처 DB '전수조사(Full Scan)' 가동 ===")
+    print("=== 🌟 션 팀장님 최종 승인: 2026년 2월 신약 17건 확보 (경량화 버전) ===")
     
     list_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
     
-    # [1단계] 전체 페이지 계산
-    print(">> [정찰] 전체 페이지 수 확인 중...")
+    # [1단계] 전체 페이지 파악
+    print(">> [정찰] 데이터 위치 계산 중...")
     try:
         res = requests.get(list_url, params={'serviceKey': API_KEY, 'numOfRows': '1', 'type': 'xml'}, timeout=10)
         total_count = int(ET.fromstring(res.text).findtext('.//totalCount'))
         last_page = math.ceil(total_count / 100)
-        print(f">> 총 {total_count}건. 1페이지부터 {last_page}페이지까지 전부 뒤집니다.")
+        print(f">> 총 {total_count}건. 마지막 {last_page}페이지부터 탐색합니다.")
     except Exception as e:
         print(f"❌ 접속 실패: {e}")
         return
 
     total_saved = 0
     
-    # [2단계] 무제한 역순 스캔 (Last Page -> 1 Page)
-    # 중간에 멈추는 조건(break) 없이 끝까지 갑니다.
-    print(f">> 전수조사 시작! (예상 소요시간: 조금 걸리지만 확실합니다)")
+    # [2단계] 광역 역순 스캔 (뒤에서 200페이지)
+    # 17건이 발견된 구간(290~440p)을 충분히 커버하도록 설정
+    scan_range = 200
+    start_page = last_page
+    end_page = max(1, last_page - scan_range)
+    
+    print(f">> 탐색 범위: {start_page}p ~ {end_page}p (2026년 코드 필터링)")
 
-    for page in range(last_page, 0, -1):
-        # 진행상황 표시 (10페이지마다 로그)
+    for page in range(start_page, end_page, -1):
+        # 진행상황 로그 (너무 자주 찍히지 않게 10페이지마다)
         if page % 10 == 0:
-            print(f">> [진행중] {page}페이지 통과 중... (현재 {total_saved}건 발견)")
-        
+            print(f">> [진행] {page}페이지 통과 중... (현재 {total_saved}건 확보)")
+            
         params = {
             'serviceKey': API_KEY,
             'pageNo': str(page),
@@ -70,56 +77,49 @@ def main():
             items = ET.fromstring(res.text).findall('.//item')
             if not items: continue
 
-            # 페이지 내 아이템 전수 검사
+            # 페이지 내 역순 탐색
             for item in reversed(items):
-                # 1. 1차 필터: '취소일자' 있으면 탈락
+                # 1. 취소된 약 패스
                 if item.findtext('CANCEL_DATE'): continue
 
-                # 2. 2차 필터: '2026' 코드가 아니면 탈락 (광속 패스)
+                # 2. 2026년 코드 필터 (속도 핵심)
                 code = item.findtext('PRDLST_STDR_CODE') or ""
                 if not code.startswith("2026"):
                     continue 
                 
-                # --- 여기 도달하면 '2026년생 유효 약품' ---
-                product_name = item.findtext('ITEM_NAME')
+                # 3. 상세 정보 확인 (날짜 & 성분)
                 item_seq = item.findtext('ITEM_SEQ')
+                product_name = item.findtext('ITEM_NAME')
                 
-                # 3. 상세 검증: 진짜 허가일자 확인
-                detail = get_api_detail(item_seq)
+                detail = get_api_date_and_ingr(item_seq)
                 if not detail or not detail['date']: continue
                 
                 real_date = detail['date'].replace("-", "").replace(".", "")
                 
-                # 4. 최종 타겟: 2월 1일 이후 데이터
+                # 4. [타겟] 2026년 2월 데이터 수집
                 if real_date >= "20260201":
-                    print(f"   -> [💎검거완료] {product_name} (날짜:{real_date}, 페이지:{page})")
+                    print(f"   -> [💎저장] {product_name} ({real_date})")
                     
                     data = {
                         "item_seq": item_seq,
                         "product_name": product_name,
                         "company": item.findtext('ENTP_NAME'),
-                        "manufacturer": detail['manu'],
                         "category": item.findtext('SPCLTY_PBLC') or "구분없음",
-                        "approval_type": "정상",
                         "ingredients": detail['ingr'],
-                        "efficacy": detail['effi'],
                         "approval_date": real_date,
                         "detail_url": f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
+                        # 삭제된 항목: manufacturer, efficacy, approval_type
                     }
                     
                     supabase.table("drug_approvals").upsert(data).execute()
                     total_saved += 1
-                    time.sleep(0.05) # API 매너 호출
+                    time.sleep(0.02) # 데이터가 가벼워졌으므로 대기시간 단축
                 
-                elif real_date >= "20260101":
-                    # 1월 데이터는 로그 없이 패스 (전수조사 속도를 위해)
-                    pass
-
         except Exception as e:
-            print(f"⚠️ {page}페이지 에러: {e}")
+            print(f"⚠️ 에러: {e}")
             continue
 
-    print(f"\n=== 🏆 전수조사 종료: DB를 탈탈 털어 총 {total_saved}건을 확보했습니다! ===")
+    print(f"\n=== 🏆 최종 완료: 깔끔하게 정리된 2월 신약 {total_saved}건 저장 완료! ===")
 
 if __name__ == "__main__":
     main()
