@@ -2,7 +2,7 @@ name: Weekly Drug Approval & AI Analysis
 
 on:
   schedule:
-    - cron: '0 12 * * 5' # 매주 금요일 밤 9시 (KST)
+    - cron: '0 12 * * 5' # 매주 금요일 밤 9시
   workflow_dispatch:      # 수동 실행 버튼
 
 jobs:
@@ -12,14 +12,14 @@ jobs:
       - name: 1. 코드 체크아웃
         uses: actions/checkout@v3
 
-      - name: 2. 파이썬 설정
+      - name: 2. 파이썬 설정 (버전 업그레이드!)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11'  # 3.9 -> 3.11로 변경 (중요!)
 
-      - name: 3. 라이브러리 설치 (Scraper + AI)
+      - name: 3. 라이브러리 설치
         run: |
-          pip install requests beautifulsoup4 supabase google-generativeai
+          pip install -U requests beautifulsoup4 supabase google-generativeai
 
       - name: 4. 데이터 수집 (Scraper)
         env:
