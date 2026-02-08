@@ -12,69 +12,78 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def ask_gemini(product_name, ingredients):
-    # 1.5 Flash 모델에게 직접 물어봅니다.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
+    # 🌟 [전략] 4가지 모델을 순서대로 다 찔러봅니다. (하나라도 되면 성공!)
+    candidate_models = [
+        "gemini-1.5-flash",       # 1순위
+        "gemini-1.5-flash-001",   # 2순위 (정식명칭)
+        "gemini-pro",             # 3순위 (가장 안정적)
+        "gemini-1.0-pro"          # 4순위 (구형)
+    ]
+
     prompt = f"""
     제품명: {product_name}
     성분: {ingredients}
-    이 약의 1. 효능군(category)과 2. 한줄요약(summary)을 JSON으로 답해.
+    이 약의 1. 효능군(category, 한단어 명사)과 2. 한줄요약(summary)을 JSON으로 답해.
     """
     
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
-    try:
-        response = requests.post(url, json=payload, timeout=10)
+    # 🔄 모델 리스트를 돌면서 시도
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         
-        # 🚨 [핵심] 구글이 거절하면 그 이유(메시지)를 그대로 출력합니다.
-        if response.status_code != 200:
-            print(f"❌ 구글 거절 사유 (Code {response.status_code}):")
-            print(f"   👉 메시지: {response.text}")
-            return None
-
-        # 성공하면 처리
-        result = response.json()
-        text = result['candidates'][0]['content']['parts'][0]['text']
-        text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
+        try:
+            # print(f"   👉 시도 중: {model_name}...") # 디버깅용 (주석처리)
+            response = requests.post(url, json=payload, timeout=10)
             
-    except Exception as e:
-        print(f"❌ 시스템 에러: {e}")
-        return None
+            # 성공(200)하면 바로 결과 반환하고 탈출!
+            if response.status_code == 200:
+                result = response.json()
+                text = result['candidates'][0]['content']['parts'][0]['text']
+                text = text.replace("```json", "").replace("```", "").strip()
+                return json.loads(text)
+            
+            # 실패하면 다음 모델로 넘어감 (Continue)
+            
+        except Exception:
+            continue
+
+    # 모든 모델이 다 실패했을 때
+    print(f"⚠️ 모든 AI 모델 접속 실패 ({product_name})")
+    return None
 
 def main():
-    print("=== 🤖 AI 분석관 (정밀 진단 모드) 시작 ===")
+    print("=== 🤖 AI 약품 분석관 (Multi-Model) 출근! ===")
     
-    # 1. 키가 제대로 들어왔는지 길이 확인
-    if GEMINI_API_KEY:
-        print(f"🔑 API Key 상태: 로드됨 (길이: {len(GEMINI_API_KEY)}자)")
-    else:
-        print("🚨 API Key 상태: 없음 (NULL) - Secrets 설정을 확인하세요!")
-        return
-
-    # 2. 분석할 데이터 가져오기
+    # 분석 안 된 것 가져오기
     response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
     drugs = response.data
     
     if not drugs:
-        print(">> 분석할 대기열이 없습니다.")
+        print(">> 분석할 대기열이 없습니다. 모두 완료 상태입니다! 🎉")
         return
 
-    # 3. 딱 1개만 시도해보고 로그 출력 (많이 할 필요 없음)
-    drug = drugs[0]
-    print(f">> 진단 대상: {drug['product_name']}")
+    print(f">> 분석할 대기열: {len(drugs)}건 발견")
     
-    result = ask_gemini(drug['product_name'], drug['ingredients'])
-    
-    if result:
-        print("🎉 진단 결과: 성공! (API 키와 모델 모두 정상입니다)")
-        # 성공했으면 저장까지
-        supabase.table("drug_approvals").update({
-            "ai_category": result.get('category'),
-            "ai_summary": result.get('summary')
-        }).eq("item_seq", drug['item_seq']).execute()
-    else:
-        print("💥 진단 결과: 실패 (위의 구글 거절 사유를 확인하세요)")
+    count = 0
+    for drug in drugs:
+        seq = drug['item_seq']
+        name = drug['product_name']
+        ingr = drug['ingredients'] or "정보없음"
+        
+        ai_result = ask_gemini(name, ingr)
+        
+        if ai_result:
+            supabase.table("drug_approvals").update({
+                "ai_category": ai_result.get('category', '기타'),
+                "ai_summary": ai_result.get('summary', '정보없음')
+            }).eq("item_seq", seq).execute()
+            
+            print(f"   ✅ [{name}] 분류: {ai_result.get('category')} | 요약 완료")
+            count += 1
+            time.sleep(1) # 과부하 방지
+
+    print(f"=== 🏆 총 {count}건 AI 분석 완료! ===")
 
 if __name__ == "__main__":
     main()
