@@ -1,0 +1,34 @@
+name: Weekly Drug Approval Scraper (Friday 21:00 KST)
+
+on:
+  # 1. 자동 스케줄링
+  schedule:
+    # KST 밤 9시 = UTC 낮 12시 (9시간 차이)
+    # 분 시 일 월 요일(0=일, 5=금, 6=토)
+    - cron: '0 12 * * 5'
+
+  # 2. 수동 실행 (테스트용 버튼 유지)
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: 2. 파이썬 설정 (3.9 버전)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 3. 라이브러리 설치
+        run: |
+          pip install requests beautifulsoup4 supabase
+
+      - name: 4. 스크래퍼 실행
+        env:
+          # 깃허브 Settings > Secrets에 저장된 키를 불러옵니다
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scraper.py
