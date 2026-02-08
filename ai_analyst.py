@@ -1,7 +1,7 @@
 import os
 import time
 import json
-from google import genai # 🌟 구글의 최신 라이브러리 호출
+from google import genai
 from supabase import create_client, Client
 
 # 1. 설정
@@ -10,8 +10,6 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# 🌟 [New SDK] 클라이언트 연결 방식 변경
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def ask_gemini(product_name, ingredients):
@@ -29,13 +27,12 @@ def ask_gemini(product_name, ingredients):
     {{"category": "...", "summary": "..."}}
     """
     try:
-        # 🌟 [New SDK] 명령어 변경: models.generate_content
+        # 🌟 [수정] 가장 확실한 정식 모델명 사용 (gemini-1.5-flash-001)
         response = client.models.generate_content(
-            model='gemini-1.5-flash', # 최신 모델 사용
+            model='gemini-1.5-flash-001', 
             contents=prompt
         )
         
-        # 응답 처리
         text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except Exception as e:
@@ -43,9 +40,8 @@ def ask_gemini(product_name, ingredients):
         return None
 
 def main():
-    print("=== 🤖 AI 약품 분석관(New SDK: 1.5-Flash) 출근했습니다! ===")
+    print("=== 🤖 AI 약품 분석관(New SDK: Flash-001) 출근했습니다! ===")
     
-    # 분석 안 된 것 가져오기
     response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
     drugs = response.data
     
@@ -69,7 +65,7 @@ def main():
             }).eq("item_seq", seq).execute()
             
             print(f"   ✅ [{name}] 분류: {ai_result.get('category')} | 요약 완료")
-            time.sleep(1) # 과부하 방지
+            time.sleep(1)
 
     print("=== 🏆 AI 분석 완료! ===")
 
