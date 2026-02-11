@@ -14,11 +14,10 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 2. 날짜 설정 (🕑 여기가 핵심! 한국 시간 KST 적용)
-# GitHub 서버(UTC)가 아니라 '한국 시간' 기준으로 날짜를 잡아야 '오늘' 데이터를 가져옵니다.
+# 2. 날짜 설정 (한국 시간 KST)
 KST = timezone(timedelta(hours=9))
 end_date = datetime.now(KST)
-start_date = end_date - timedelta(days=14) # 넉넉하게 2주치 조회 (누락 방지)
+start_date = end_date - timedelta(days=14) # 최근 2주 조회
 
 str_start = start_date.strftime("%Y%m%d")
 str_end = end_date.strftime("%Y%m%d")
@@ -26,29 +25,38 @@ str_end = end_date.strftime("%Y%m%d")
 print(f"=== 🕵️‍♀️ 데이터 수집 시작 (한국시간: {str_start} ~ {str_end}) ===")
 
 def run_scraper():
-    # 3. URL 수정 (searchType 제거 -> 조건 없이 날짜로만 검색)
-    # pageSize=100 : 한 번에 100개씩 긁어오기
-    url = f"https://nedrug.mfds.go.kr/searchDrug/searchDrugList?page=1&searchYn=true&startDate={str_start}&endDate={str_end}&pageSize=100"
+    # 3. URL 수정 (searchType=ST1 복구 -> 제품명 전체 검색)
+    # 이걸 넣어야 식약처가 검색 결과를 보여줍니다.
+    url = f"https://nedrug.mfds.go.kr/searchDrug/searchDrugList?page=1&searchYn=true&startDate={str_start}&endDate={str_end}&searchType=ST1&pageSize=100"
     
-    # 4. 헤더 추가 (봇 차단 방지용 '주민등록증')
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
 
     try:
+        print(f"🌐 접속 시도: {url}")
         res = requests.get(url, headers=headers)
+        
+        # 접속 실패 시 확인
+        if res.status_code != 200:
+            print(f"🚨 접속 실패 (Status Code: {res.status_code})")
+            return
+
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # 테이블 찾기
-        table = soup.find("div", class_="r_sec").find("table", class_="dr_table")
+        # 4. 테이블 찾기 (안전장치 강화)
+        # r_sec div가 없어도 table을 찾을 수 있게 직접 찾기 시도
+        table = soup.find("table", class_="dr_table")
+        
         if not table:
-            print("❌ 식약처 사이트에서 테이블을 못 찾았습니다. (구조 변경 또는 접속 차단)")
+            # 테이블이 없으면 사이트가 뭐라고 하는지 텍스트를 조금 찍어봅니다.
+            print("❌ 식약처 사이트에서 표를 찾을 수 없습니다.")
+            print(f"📄 페이지 내용 일부: {soup.text[:200].strip()}...")
             return
 
         rows = table.find("tbody").find_all("tr")
         print(f"🔎 검색된 의약품 수: {len(rows)}개")
 
-        # '검색 결과가 없습니다' 처리
         if len(rows) == 1 and "검색된 데이터가 없습니다" in rows[0].text:
             print(">> 해당 기간에 신규 허가된 의약품이 없습니다.")
             return
@@ -81,10 +89,9 @@ def run_scraper():
                     "category": category,
                     "approval_date": approval_date,
                     "detail_url": "https://nedrug.mfds.go.kr" + detail_href,
-                    # created_at 생략 (DB 자동 생성)
                 }
 
-                # Supabase Upsert (중복이면 무시/업데이트, 없으면 추가)
+                # Supabase Upsert
                 result = supabase.table("drug_approvals").upsert(data, on_conflict="item_seq").execute()
                 count += 1
                 
@@ -95,7 +102,7 @@ def run_scraper():
         print(f"✅ 수집 완료: 총 {count}건 처리됨")
 
     except Exception as e:
-        print(f"🚨 스크래핑 치명적 오류: {e}")
+        print(f"🚨 스크래핑 시스템 에러: {e}")
 
 if __name__ == "__main__":
     run_scraper()
