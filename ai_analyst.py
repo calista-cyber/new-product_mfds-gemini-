@@ -2,88 +2,99 @@ import os
 import time
 import json
 import requests
-from supabase import create_client, Client
+import gspread
+from google.oauth2.service_account import Credentials
 
-# 1. 설정
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# 1. 설정 (구글 시트 & Gemini 키)
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+gcp_secret = os.environ.get("GCP_SERVICE_ACCOUNT")
+sheet_id = os.environ.get("GOOGLE_SHEET_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+if not gcp_secret or not sheet_id or not GEMINI_API_KEY:
+    print("🚨 필수 환경변수(구글 키, 시트 ID, Gemini 키) 누락!")
+    exit()
 
-def ask_gemini(product_name, ingredients):
-    # 🌟 [전략] 4가지 모델을 순서대로 다 찔러봅니다. (하나라도 되면 성공!)
-    candidate_models = [
-        "gemini-1.5-flash",       # 1순위
-        "gemini-1.5-flash-001",   # 2순위 (정식명칭)
-        "gemini-pro",             # 3순위 (가장 안정적)
-        "gemini-1.0-pro"          # 4순위 (구형)
-    ]
+credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scopes=scope)
+gc = gspread.authorize(credentials)
+worksheet = gc.open_by_key(sheet_id).sheet1
+
+def ask_gemini(product_name, ingredients, review_type):
+    # 🌟 안정적인 모델 위주로 시도
+    candidate_models = ["gemini-1.5-flash", "gemini-pro"]
 
     prompt = f"""
-    제품명: {product_name}
-    성분: {ingredients}
-    이 약의 1. 효능군(category, 한단어 명사)과 2. 한줄요약(summary)을 JSON으로 답해.
+    당신은 제약/바이오 전문가입니다. 다음 약품 정보를 분석해주세요.
+    - 제품명: {product_name}
+    - 주성분: {ingredients}
+    - 허가심사유형: {review_type}
+
+    출력형식은 반드시 아래와 같은 JSON 형태여야 합니다:
+    {{
+        "category": "당뇨병 치료제, 내분비 질환 (#신약)", 
+        "summary": "제2형 당뇨병 성인 환자의 혈당 조절을 돕는 알약입니다."
+    }}
+    (category는 이 약의 용도와 타겟 질환, 그리고 신약/희귀의약품 여부를 태그로 달아주세요. summary는 일반인이 이해하기 쉽게 1~2줄로 요약해주세요.)
     """
     
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
-    # 🔄 모델 리스트를 돌면서 시도
     for model_name in candidate_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        
         try:
-            # print(f"   👉 시도 중: {model_name}...") # 디버깅용 (주석처리)
-            response = requests.post(url, json=payload, timeout=10)
-            
-            # 성공(200)하면 바로 결과 반환하고 탈출!
+            response = requests.post(url, json=payload, timeout=15)
             if response.status_code == 200:
                 result = response.json()
                 text = result['candidates'][0]['content']['parts'][0]['text']
                 text = text.replace("```json", "").replace("```", "").strip()
                 return json.loads(text)
-            
-            # 실패하면 다음 모델로 넘어감 (Continue)
-            
         except Exception:
             continue
-
-    # 모든 모델이 다 실패했을 때
-    print(f"⚠️ 모든 AI 모델 접속 실패 ({product_name})")
+            
+    print(f"⚠️ AI 분석 실패 ({product_name})")
     return None
 
 def main():
-    print("=== 🤖 AI 약품 분석관 (Multi-Model) 출근! ===")
+    print("=== 🤖 AI 약품 분석관 (구글 시트 모드) 출근! ===")
     
-    # 분석 안 된 것 가져오기
-    response = supabase.table("drug_approvals").select("*").is_("ai_category", "null").execute()
-    drugs = response.data
+    # 구글 시트에서 전체 데이터 가져오기
+    records = worksheet.get_all_records()
     
-    if not drugs:
+    # 분석 안 된 항목(AI_분류가 비어있는 항목) 찾기
+    pending_items = []
+    # 행 번호는 헤더(1행) + 인덱스 + 1 => 즉, 인덱스 + 2
+    for idx, row in enumerate(records):
+        if not row.get("AI_분류") or row.get("AI_분류").strip() == "":
+            pending_items.append({"row_num": idx + 2, "data": row})
+            
+    if not pending_items:
         print(">> 분석할 대기열이 없습니다. 모두 완료 상태입니다! 🎉")
         return
 
-    print(f">> 분석할 대기열: {len(drugs)}건 발견")
+    print(f">> 분석할 대기열: {len(pending_items)}건 발견")
     
     count = 0
-    for drug in drugs:
-        seq = drug['item_seq']
-        name = drug['product_name']
-        ingr = drug['ingredients'] or "정보없음"
+    for item in pending_items:
+        row_num = item["row_num"]
+        data = item["data"]
         
-        ai_result = ask_gemini(name, ingr)
+        name = data.get('제품명', '')
+        ingr = data.get('주성분', '')
+        review = data.get('허가심사유형', '')
+        
+        print(f"   🧠 분석 중: [{name}]...")
+        ai_result = ask_gemini(name, ingr, review)
         
         if ai_result:
-            supabase.table("drug_approvals").update({
-                "ai_category": ai_result.get('category', '기타'),
-                "ai_summary": ai_result.get('summary', '정보없음')
-            }).eq("item_seq", seq).execute()
+            # J열(10번째 열: AI_분류), K열(11번째 열: AI_요약) 업데이트
+            worksheet.update_cell(row_num, 10, ai_result.get('category', '분류 실패'))
+            worksheet.update_cell(row_num, 11, ai_result.get('summary', '요약 실패'))
             
-            print(f"   ✅ [{name}] 분류: {ai_result.get('category')} | 요약 완료")
+            print(f"   ✅ 완료: {ai_result.get('category')}")
             count += 1
-            time.sleep(1) # 과부하 방지
+            time.sleep(2) # 구글 시트/API 과부하 방지 (천천히 작업)
 
-    print(f"=== 🏆 총 {count}건 AI 분석 완료! ===")
+    print(f"=== 🏆 총 {count}건 구글 시트에 AI 분석 업데이트 완료! ===")
 
 if __name__ == "__main__":
     main()
