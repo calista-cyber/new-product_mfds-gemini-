@@ -17,19 +17,22 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 3. 라이브러리 설치 (✨ Google의 새로운 'genai' 라이브러리 설치)
+      # ✨ 핵심: 이제 로봇이 requirements.txt를 제대로 읽고 모든 도구를 설치합니다!
+      - name: 3. 필수 라이브러리 한 번에 설치
         run: |
-          pip install -U requests beautifulsoup4 supabase google-genai
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: 4. 데이터 수집 (Scraper)
+      - name: 4. 데이터 수집 (Scraper - 식약처 & 구글 시트)
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
         run: python scraper.py
 
-      - name: 5. AI 데이터 분석 (Gemini)
+      - name: 5. AI 데이터 분석 (Gemini - 구글 시트 업데이트)
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python ai_analyst.py
