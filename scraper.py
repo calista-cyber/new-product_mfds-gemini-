@@ -8,7 +8,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
-# 1. 설정
+# 1. 설정 및 인증
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 gcp_secret = os.environ.get("GCP_SERVICE_ACCOUNT")
 sheet_id = os.environ.get("GOOGLE_SHEET_ID")
@@ -18,7 +18,7 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정
+# 2. 날짜 설정 (최근 1주일)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=7) 
@@ -33,14 +33,15 @@ chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 
-def clean_text(td):
-    """중복 텍스트 방지: span 태그를 제거하고 순수 데이터만 추출"""
-    temp_td = BeautifulSoup(str(td), "html.parser")
-    for span in temp_td.find_all("span"):
+def clean_td(td):
+    """중복 텍스트 원인인 span 태그(모바일 라벨)를 제거하고 순수 데이터만 추출"""
+    temp_soup = BeautifulSoup(str(td), "html.parser")
+    for span in temp_soup.find_all("span"):
         span.decompose()
-    return temp_td.get_text(strip=True)
+    return temp_soup.get_text(strip=True)
 
 def get_api_data(item_seq):
+    """식약처 API를 통해 상세 정보 수집"""
     api_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {"serviceKey": urllib.parse.unquote(mfds_api_key), "item_seq": item_seq, "type": "json"}
     try:
@@ -55,6 +56,7 @@ def get_api_data(item_seq):
     except: return None
 
 def get_detail(item_seq):
+    """상세 페이지에서 위탁제조업체 및 허가유형 추출"""
     url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
     driver.get(url)
     time.sleep(1.5)
@@ -74,8 +76,8 @@ def run_scraper():
                   f"sYear={today.year}&sMonth={today.month}&sPermitDateStart={str_start}&sPermitDateEnd={str_end}&btnSearch=")
     driver.get(search_url)
     time.sleep(5)
-    rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
     
+    rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
     existing_seqs = [str(r.get('품목기준코드', '')) for r in worksheet.get_all_records()]
 
     count = 0
@@ -83,23 +85,28 @@ def run_scraper():
         cols = row.find_all("td")
         if len(cols) < 6: continue
         
-        # 취하 품목 패스
-        if re.search(r'\d', clean_text(cols[4])): continue
+        # 1. 취하 품목 필터링 (취소/취하일자 칸에 숫자가 있으면 제외)
+        if re.search(r'\d', clean_td(cols[4])): continue
 
         try:
             item_seq = re.search(r"(\d{9})", str(cols[1].find("a"))).group(1)
             if item_seq in existing_seqs: continue
             
+            # API 데이터 우선, 실패 시 표에서 추출 (노란 하이라이트 방지 적용)
             api = get_api_data(item_seq) or {
-                "name": clean_text(cols[1]), "ingr": "API 확인 필요",
-                "com": clean_text(cols[2]), "date": clean_text(cols[3]), "cat": clean_text(cols[5])
+                "name": clean_td(cols[1]), "ingr": "API 확인 필요",
+                "com": clean_td(cols[2]), "date": clean_td(cols[3]), "cat": clean_td(cols[5])
             }
             mfg, rv, url = get_detail(item_seq)
             
+            # 3. 상세링크 '클릭' 하이퍼링크 적용
+            hyperlink = f'=HYPERLINK("{url}", "클릭")'
+
             new_row = [item_seq, api["name"], api["ingr"], api["com"], api["date"], api["cat"], 
-                       mfg, rv, f'=HYPERLINK("{url}", "클릭")', "", "", datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")]
+                       mfg, rv, hyperlink, "", "", datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")]
             
             worksheet.append_row(new_row, value_input_option='USER_ENTERED')
+            existing_seqs.append(item_seq)
             count += 1
         except: continue
 
