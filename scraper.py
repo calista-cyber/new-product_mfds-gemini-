@@ -108,7 +108,7 @@ def run_scraper():
     search_url = f"https://nedrug.mfds.go.kr/searchDrug/searchDrugList?page=1&searchYn=true&startDate={str_start}&endDate={str_end}&searchType=ST1&searchKeyword=&pageSize=100"
     
     driver.get(search_url)
-    time.sleep(3) # 식약처 방어막 우회를 위한 대기
+    time.sleep(10) # 식약처 방어막 우회를 위한 대기
     
     soup = BeautifulSoup(driver.page_source, "html.parser")
     table = soup.find("table", class_="dr_table")
@@ -190,3 +190,4 @@ def run_scraper():
 
 if __name__ == "__main__":
     run_scraper()
+
