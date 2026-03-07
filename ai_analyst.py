@@ -20,8 +20,7 @@ gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
 def ask_gemini(product_name, ingredients, review_type):
-    # 🌟 안정적인 모델 위주로 시도
-    candidate_models = ["gemini-1.5-flash", "gemini-pro"]
+    candidate_models = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
     prompt = f"""
     당신은 제약/바이오 전문가입니다. 다음 약품 정보를 분석해주세요.
@@ -34,7 +33,6 @@ def ask_gemini(product_name, ingredients, review_type):
         "category": "당뇨병 치료제, 내분비 질환 (#신약)", 
         "summary": "제2형 당뇨병 성인 환자의 혈당 조절을 돕는 알약입니다."
     }}
-    (category는 이 약의 용도와 타겟 질환, 그리고 신약/희귀의약품 여부를 태그로 달아주세요. summary는 일반인이 이해하기 쉽게 1~2줄로 요약해주세요.)
     """
     
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -48,23 +46,24 @@ def ask_gemini(product_name, ingredients, review_type):
                 text = result['candidates'][0]['content']['parts'][0]['text']
                 text = text.replace("```json", "").replace("```", "").strip()
                 return json.loads(text)
-        except Exception:
+            else:
+                # 🌟 에러가 나면 왜 났는지 확실하게 출력!
+                print(f"      [디버그] API 에러 ({response.status_code}): {response.text[:100]}...")
+        except Exception as e:
+            print(f"      [디버그] 파이썬 에러: {e}")
             continue
             
-    print(f"⚠️ AI 분석 실패 ({product_name})")
     return None
 
 def main():
     print("=== 🤖 AI 약품 분석관 (구글 시트 모드) 출근! ===")
     
-    # 구글 시트에서 전체 데이터 가져오기
     records = worksheet.get_all_records()
     
-    # 분석 안 된 항목(AI_분류가 비어있는 항목) 찾기
     pending_items = []
-    # 행 번호는 헤더(1행) + 인덱스 + 1 => 즉, 인덱스 + 2
     for idx, row in enumerate(records):
-        if not row.get("AI_분류") or row.get("AI_분류").strip() == "":
+        # AI_분류가 비어있는 항목만 골라내기
+        if not row.get("AI_분류") or str(row.get("AI_분류")).strip() == "":
             pending_items.append({"row_num": idx + 2, "data": row})
             
     if not pending_items:
@@ -86,13 +85,15 @@ def main():
         ai_result = ask_gemini(name, ingr, review)
         
         if ai_result:
-            # J열(10번째 열: AI_분류), K열(11번째 열: AI_요약) 업데이트
             worksheet.update_cell(row_num, 10, ai_result.get('category', '분류 실패'))
             worksheet.update_cell(row_num, 11, ai_result.get('summary', '요약 실패'))
-            
             print(f"   ✅ 완료: {ai_result.get('category')}")
             count += 1
-            time.sleep(2) # 구글 시트/API 과부하 방지 (천천히 작업)
+        else:
+            print(f"   ⚠️ AI 분석 실패 ({name})")
+            
+        # 🌟 가장 중요한 부분! 구글 서버가 과부하로 화내지 않도록 1건 처리 후 5초씩 휴식
+        time.sleep(5) 
 
     print(f"=== 🏆 총 {count}건 구글 시트에 AI 분석 업데이트 완료! ===")
 
