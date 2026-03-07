@@ -4,29 +4,24 @@ from bs4 import BeautifulSoup
 from supabase import create_client, Client
 from datetime import datetime, timedelta, timezone
 
-# 1. 설정
+# 1. 설정 (Supabase)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("🚨 Supabase 환경변수가 없습니다.")
-    exit()
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 2. 날짜 설정 (한국 시간 KST)
+# 2. 날짜 설정 (🕑 한국 표준시 KST 강제 적용)
+# GitHub 서버(UTC)와의 9시간 차이를 보정하여 '오늘' 데이터를 정확히 수집합니다.
 KST = timezone(timedelta(hours=9))
-end_date = datetime.now(KST)
-start_date = end_date - timedelta(days=14) # 최근 2주 조회
+today = datetime.now(KST)
+start_date = today - timedelta(days=7) # 최근 1주일치 데이터 집중 수집
 
 str_start = start_date.strftime("%Y%m%d")
-str_end = end_date.strftime("%Y%m%d")
-
-print(f"=== 🕵️‍♀️ 데이터 수집 시작 (한국시간: {str_start} ~ {str_end}) ===")
+str_end = today.strftime("%Y%m%d")
 
 def run_scraper():
-    # 3. URL 수정 (searchType=ST1 복구 -> 제품명 전체 검색)
-    # 이걸 넣어야 식약처가 검색 결과를 보여줍니다.
+    print(f"=== 🕵️‍♀️ 데이터 수집 시작 (검색범위: {str_start} ~ {str_end}) ===")
+    
+    # 3. URL 설정 (searchType=ST1: 제품명 검색 조건 추가로 테이블 유실 방지)
     url = f"https://nedrug.mfds.go.kr/searchDrug/searchDrugList?page=1&searchYn=true&startDate={str_start}&endDate={str_end}&searchType=ST1&pageSize=100"
     
     headers = {
@@ -34,75 +29,53 @@ def run_scraper():
     }
 
     try:
-        print(f"🌐 접속 시도: {url}")
         res = requests.get(url, headers=headers)
-        
-        # 접속 실패 시 확인
-        if res.status_code != 200:
-            print(f"🚨 접속 실패 (Status Code: {res.status_code})")
-            return
-
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # 4. 테이블 찾기 (안전장치 강화)
-        # r_sec div가 없어도 table을 찾을 수 있게 직접 찾기 시도
+        # 4. 데이터 테이블 찾기
         table = soup.find("table", class_="dr_table")
-        
         if not table:
-            # 테이블이 없으면 사이트가 뭐라고 하는지 텍스트를 조금 찍어봅니다.
-            print("❌ 식약처 사이트에서 표를 찾을 수 없습니다.")
-            print(f"📄 페이지 내용 일부: {soup.text[:200].strip()}...")
+            print("❌ 테이블을 찾을 수 없습니다. 식약처 서버 응답이 올바르지 않습니다.")
             return
 
         rows = table.find("tbody").find_all("tr")
-        print(f"🔎 검색된 의약품 수: {len(rows)}개")
-
-        if len(rows) == 1 and "검색된 데이터가 없습니다" in rows[0].text:
+        
+        # 검색 결과 없음 처리
+        if len(rows) == 1 and "데이터가 없습니다" in rows[0].text:
             print(">> 해당 기간에 신규 허가된 의약품이 없습니다.")
             return
+
+        print(f"🔎 웹페이지에서 총 {len(rows)}개의 의약품 후보 발견")
 
         count = 0
         for row in rows:
             cols = row.find_all("td")
-            if len(cols) < 2:
-                continue
+            if len(cols) < 5: continue
                 
             try:
-                # 데이터 추출
                 link_tag = cols[1].find("a")
-                detail_href = link_tag["href"]
-                
-                if "itemSeq=" in detail_href:
-                    item_seq = detail_href.split("itemSeq=")[1].split("&")[0]
-                else:
-                    continue
-
-                item_name = link_tag.text.strip()
-                company = cols[2].text.strip()
-                category = cols[3].text.strip()
-                approval_date = cols[4].text.strip()
+                item_seq = link_tag["href"].split("itemSeq=")[1].split("&")[0]
                 
                 data = {
                     "item_seq": item_seq,
-                    "product_name": item_name,
-                    "company": company,
-                    "category": category,
-                    "approval_date": approval_date,
-                    "detail_url": "https://nedrug.mfds.go.kr" + detail_href,
+                    "product_name": link_tag.text.strip(),
+                    "company": cols[2].text.strip(),
+                    "category": cols[3].text.strip(),
+                    "approval_date": cols[4].text.strip(),
+                    "detail_url": "https://nedrug.mfds.go.kr" + link_tag["href"]
                 }
 
-                # Supabase Upsert
-                result = supabase.table("drug_approvals").upsert(data, on_conflict="item_seq").execute()
+                # Supabase Upsert (중복은 무시하고 신규 품목기준코드만 추가)
+                supabase.table("drug_approvals").upsert(data, on_conflict="item_seq").execute()
                 count += 1
                 
-            except Exception as e:
-                print(f"⚠️ 에러 발생 ({item_name}): {e}")
+            except Exception:
                 continue
 
-        print(f"✅ 수집 완료: 총 {count}건 처리됨")
+        print(f"✅ 수집 완료: 총 {count}건의 데이터를 처리했습니다.")
 
     except Exception as e:
-        print(f"🚨 스크래핑 시스템 에러: {e}")
+        print(f"🚨 스크래핑 시스템 오류: {e}")
 
 if __name__ == "__main__":
     run_scraper()
