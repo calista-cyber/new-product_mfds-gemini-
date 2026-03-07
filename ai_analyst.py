@@ -11,47 +11,50 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-def ask_chatgpt(name, ingr, rv):
-    """ChatGPT를 이용한 약품 분석 및 요약"""
+def ask_chatgpt(name, company, category):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    prompt = f"의약품[{name}], 업체[{company}], 구분[{category}] 정보를 기반으로 전문적인 한줄분류와 핵심요약을 JSON으로 작성해. 형식: {{'category':'분류', 'summary':'요약'}}"
     
-    prompt = f"약품[{name}], 성분[{ingr}], 유형[{rv}] 분석해서 {{'category':'분류', 'summary':'요약'}} JSON으로 답해."
     payload = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
-        "response_format": { "type": "json_object" } # JSON 모드 강제
+        "response_format": { "type": "json_object" }
     }
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=20).json()
+        res = requests.post(url, headers=headers, json=payload, timeout=25).json()
         return json.loads(res['choices'][0]['message']['content'])
     except: return None
 
 def main():
-    print("=== 🤖 ChatGPT 분석관 출근! ===")
+    print("=== 🤖 ChatGPT 분석관 가동! ===")
     records = worksheet.get_all_records()
     
-    # AI_분류 칸이 비어있는 행만 추출
+    # AI_분류(J열)가 비어있는 행만 정확히 타겟팅
     pending = []
-    for i, r in enumerate(records):
-        val = str(r.get("AI_분류", "")).strip()
-        if not val or val.lower() == "none":
-            pending.append({"row": i+2, "data": r})
+    for idx, row in enumerate(records):
+        if not str(row.get("AI_분류", "")).strip():
+            pending.append({"row_num": idx + 2, "data": row})
     
-    if not pending: return print(">> 분석할 대기열 없음 🥳")
+    if not pending: return print(">> 모든 분석이 완료되었습니다! 🎉")
 
-    print(f">> 분석 대기: {len(pending)}건 발견")
+    print(f">> 분석 대기: {len(pending)}건")
     for item in pending:
-        row_num, data = item["row"], item["data"]
-        print(f"   🧠 GPT 분석 중: [{data.get('제품명')}]")
+        r_num, d = item["row_num"], item["data"]
+        name = d.get('제품명', '이름없음')
         
-        res = ask_chatgpt(data.get('제품명'), data.get('주성분'), data.get('허가심사유형'))
+        print(f"   🧠 분석 중: [{name}] (행:{r_num})")
+        res = ask_chatgpt(name, d.get('업체명', ''), d.get('전문/일반구분', ''))
+        
         if res:
-            # J열(10): 분류, K열(11): 요약 업데이트
-            worksheet.update_cell(row_num, 10, res.get('category'))
-            worksheet.update_cell(row_num, 11, res.get('summary'))
-            print("      ✅ 업데이트 성공!")
-        time.sleep(1) # API 속도 조절
+            # J열과 K열을 한꺼번에 업데이트하여 확실하게 기록
+            try:
+                worksheet.update(f"J{r_num}:K{r_num}", [[res.get('category'), res.get('summary')]])
+                print(f"      ✅ 시트 업데이트 성공! (J{r_num}, K{r_num})")
+            except Exception as e:
+                print(f"      ❌ 시트 기록 에러: {e}")
+        
+        time.sleep(2) # 안정성을 위해 2초 대기
 
 if __name__ == "__main__":
     main()
