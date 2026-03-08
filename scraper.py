@@ -18,7 +18,7 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정 (최근 7일 검색용)
+# 2. 날짜 설정 (최근 7일)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=7) 
@@ -61,8 +61,9 @@ def get_detail_info(item_seq):
         th_rv = soup.find("th", string=lambda t: t and "허가심사유형" in t)
         if th_rv: rv_type = th_rv.find_next_sibling("td").text.strip()
         
+        # 🌟 수정 포인트: 상세 웹페이지에서 여러 성분이 뭉치지 않게 쉼표(', ')로 연결되도록 변경
         th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
-        if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").text.strip()
+        if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").get_text(separator=", ", strip=True)
     except: pass
     return mfg, rv_type, detail_ingr
 
@@ -82,7 +83,7 @@ def run_scraper():
         cols = row.find_all("td")
         if len(cols) < 6: continue
         
-        # 🛡️ 팀장님 제안 로직: '취소/취하일자' 칸에 숫자가 있으면 가차 없이 패스!
+        # 취소/취하일자 검사
         cancel_date = safe_clean(cols[4])
         if cancel_date and re.search(r'\d', cancel_date): 
             print(f"   ⏩ 취하 제품 제외됨")
@@ -96,10 +97,15 @@ def run_scraper():
             api = get_api_data(item_seq)
             mfg, rv_type, detail_ingr = get_detail_info(item_seq)
             
-            final_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
+            raw_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
+            
+            # 🌟 핵심 추가 로직: M코드 삭제 및 성분 간 쉼표(,) 간격 확보
+            clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr) # [M123456] 형태 삭제
+            clean_ingr = clean_ingr.replace('|', ', ').strip() # API의 세로선(|) 기호를 쉼표로 변환
+            clean_ingr = re.sub(r',\s*,', ',', clean_ingr) # 혹시 모를 중복 쉼표 정리
             
             new_row = [
-                item_seq, product_name, final_ingr, safe_clean(cols[2]), 
+                item_seq, product_name, clean_ingr, safe_clean(cols[2]), 
                 safe_clean(cols[3]), safe_clean(cols[5]), mfg, rv_type, 
                 f'=HYPERLINK("https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}", "클릭")',
                 "", "", today.strftime("%Y-%m-%d %H:%M:%S")
