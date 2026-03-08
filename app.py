@@ -10,7 +10,7 @@ from openai import OpenAI
 # 1. 페이지 설정
 st.set_page_config(page_title="의약품 허가 인사이트 대시보드", layout="wide")
 
-# 2. 연결 설정 함수
+# 2. 연결 설정
 @st.cache_resource
 def init_connections():
     try:
@@ -22,11 +22,9 @@ def init_connections():
         st.error(f"연결 설정 중 오류 발생: {e}")
         st.stop()
 
-# 연결 실행
 gc, ai_client = init_connections()
 sheet_id = st.secrets["GOOGLE_SHEET_ID"]
 
-# 시트 데이터 불러오기
 try:
     doc = gc.open_by_key(sheet_id)
     worksheet_data = doc.sheet1
@@ -36,10 +34,10 @@ try:
         worksheet_comments = doc.add_worksheet(title="HA_money", rows="1000", cols="3")
         worksheet_comments.append_row(["작성일시", "닉네임", "내용"])
 except Exception as e:
-    st.error(f"구글 시트 접근 실패: {e}")
+    st.error(f"시트 접근 실패: {e}")
     st.stop()
 
-# 3. 데이터 로드 함수
+# 3. 데이터 로드 함수 (허가 데이터는 10분 유지)
 @st.cache_data(ttl=600)
 def load_data():
     data = worksheet_data.get_all_records()
@@ -48,7 +46,8 @@ def load_data():
         df['허가일_dt'] = pd.to_datetime(df['허가일'], errors='coerce')
     return df
 
-@st.cache_data(ttl=600)
+# [수정] 게시판 데이터는 5초만 유지 (실시간 반영을 위해)
+@st.cache_data(ttl=5)
 def load_comments():
     data = worksheet_comments.get_all_records()
     return pd.DataFrame(data)
@@ -66,7 +65,7 @@ def get_ai_analysis(df_recent):
         res = ai_client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
         return res.choices[0].message.content
     except:
-        return "AI 분석을 불러올 수 없습니다."
+        return "AI 분석관이 자리를 비웠습니다. 잠시 후 다시 시도해주세요."
 
 # --- 메인 화면 시작 ---
 st.title("💊 의약품 허가 트렌드 대시보드")
@@ -75,7 +74,6 @@ try:
     df = load_data()
     tab1, tab2, tab3 = st.tabs(["📊 인사이트 분석", "📋 허가 데이터 목록", "💰 HA_money"])
 
-    # 최근 7일 데이터 필터링
     last_7_days = pd.Timestamp.now() - pd.Timedelta(days=7)
     df_recent = df[df['허가일_dt'] >= last_7_days]
 
@@ -129,7 +127,6 @@ try:
             with col_s1:
                 search = st.text_input("제품명/주성분 검색")
             with col_s2:
-                # 필터 복구
                 if 'AI_분류' in df.columns:
                     cats = ["전체"] + sorted([str(c) for c in df['AI_분류'].unique() if c])
                     sel_cat = st.selectbox("효능군 필터", cats)
@@ -163,28 +160,36 @@ try:
             hide_index=True, use_container_width=True
         )
 
-    # --- 탭 3: 게시판 ---
+    # --- 탭 3: HA_money 게시판 ---
     with tab3:
+        st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요! (실시간 반영)")
         with st.form("ha_form", clear_on_submit=True):
             c1, c2 = st.columns([1, 4])
-            nick = c1.text_input("닉네임")
-            cont = c2.text_input("내용")
-            if st.form_submit_button("의견 등록") and cont:
-                now = datetime.now(pytz.timezone('Asia/Seoul')).strftime("%Y-%m-%d %H:%M:%S")
-                worksheet_comments.append_row([now, nick if nick else "익명", cont])
-                st.success("등록됨!")
-                time.sleep(1)
-                st.rerun()
+            nick = c1.text_input("닉네임", placeholder="익명")
+            cont = c2.text_input("내용", placeholder="이 약의 미래 가치는 어떨까요?")
+            if st.form_submit_button("의견 등록 💬") and cont:
+                try:
+                    now = datetime.now(pytz.timezone('Asia/Seoul')).strftime("%Y-%m-%d %H:%M:%S")
+                    worksheet_comments.append_row([now, nick if nick else "익명", cont])
+                    st.success("등록되었습니다! 💸")
+                    time.sleep(1)
+                    st.rerun()
+                except:
+                    st.error("등록에 실패했습니다. 시트를 확인해주세요.")
 
         try:
             comm = load_comments()
             if not comm.empty:
+                # 최신글 순 정렬
                 comm = comm.sort_values(by="작성일시", ascending=False)
                 for _, r in comm.head(20).iterrows():
                     with st.chat_message("user"):
-                        st.write(f"**{r.get('닉네임')}**: {r.get('내용')}")
-                        st.caption(f"{r.get('작성일시')}")
-        except: st.warning("로딩 중...")
+                        st.write(f"**{r.get('닉네임', '익명')}**: {r.get('내용', '')}")
+                        st.caption(f"{r.get('작성일시', '')}")
+            else:
+                st.text("아직 등록된 의견이 없습니다. 첫 의견을 남겨보세요!")
+        except:
+            st.warning("게시판 데이터를 불러오는 중입니다...")
 
 except Exception as e:
     st.error(f"오류 발생: {e}")
