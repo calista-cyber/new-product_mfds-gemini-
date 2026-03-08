@@ -171,9 +171,9 @@ try:
             use_container_width=True
         )
 
-    # --- 탭 3: HA_money 신제품이 되는 수다 게시판 ---
+    # --- 탭 3: HA_money 게시판 ---
     with tab3:
-        st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요!")
+        st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요! (익명 보장)")
         
         with st.form("ha_money_form", clear_on_submit=True):
             col_input1, col_input2 = st.columns([1, 4])
