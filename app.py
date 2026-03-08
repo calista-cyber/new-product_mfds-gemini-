@@ -108,8 +108,8 @@ except Exception as e:
 
 # --- 💰 HA_money 게시판 ---
 st.divider() 
-st.markdown("### 💰 HA_money : 돈이 되는 수다")
-st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요! (익명 보장)")
+st.markdown("### 💰 HA_money : 신제품이 만들어지는 수다")
+st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요!")
 
 with st.form("ha_money_form", clear_on_submit=True):
     col_input1, col_input2 = st.columns([1, 4])
@@ -148,3 +148,4 @@ try:
         st.text("아직 글이 없습니다. 첫 번째 의견을 남겨주세요!")
 except Exception as e:
     st.warning("게시판 로딩 중...")
+
