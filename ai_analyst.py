@@ -5,15 +5,16 @@ from google.oauth2.service_account import Credentials
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 gcp_secret = os.environ.get("GCP_SERVICE_ACCOUNT")
 sheet_id = os.environ.get("GOOGLE_SHEET_ID")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # 🌟 제미니 키로 변경!
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scopes=scope)
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
 def ask_gemini(name, company, category, ingredient):
-    """제미니 API를 활용한 안전한 JSON 분석 요청"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    """제미니 1.5 플래시의 최신(latest) 버전을 정확히 호출합니다."""
+    # 🌟 이 부분의 모델 이름이 gemini-1.5-flash-latest 로 변경되었습니다!
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -28,7 +29,7 @@ def ask_gemini(name, company, category, ingredient):
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"} # JSON 형태 강제
+        "generationConfig": {"responseMimeType": "application/json"}
     }
     
     try:
@@ -44,7 +45,7 @@ def ask_gemini(name, company, category, ingredient):
         return None
 
 def main():
-    print("=== 🤖 제미니 분석관 출근! ===")
+    print("=== 🤖 제미니 분석관 출근! (이름 오류 수정 완료) ===")
     records = worksheet.get_all_records()
     pending = []
     
@@ -69,7 +70,7 @@ def main():
                 print(f"      ✅ 시트 반영 완료!")
             except Exception as e:
                 print(f"      ❌ 시트 쓰기 에러: {e}")
-        time.sleep(2) # 무료 API 한도 보호를 위한 대기
+        time.sleep(2)
 
 if __name__ == "__main__":
     main()
