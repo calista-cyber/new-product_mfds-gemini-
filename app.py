@@ -157,3 +157,34 @@ try:
         available = [c for c in show_cols if c in df_list.columns]
         
         st.write(f"총 **{len(df_list)}**건")
+        st.dataframe(
+            df_list[available],
+            column_config={"상세링크": st.column_config.LinkColumn("상세보기", display_text="식약처 바로가기"), "No.": st.column_config.NumberColumn("No.", format="%d")},
+            hide_index=True, use_container_width=True
+        )
+
+    # --- 탭 3: 게시판 ---
+    with tab3:
+        with st.form("ha_form", clear_on_submit=True):
+            c1, c2 = st.columns([1, 4])
+            nick = c1.text_input("닉네임")
+            cont = c2.text_input("내용")
+            if st.form_submit_button("의견 등록") and cont:
+                now = datetime.now(pytz.timezone('Asia/Seoul')).strftime("%Y-%m-%d %H:%M:%S")
+                worksheet_comments.append_row([now, nick if nick else "익명", cont])
+                st.success("등록됨!")
+                time.sleep(1)
+                st.rerun()
+
+        try:
+            comm = load_comments()
+            if not comm.empty:
+                comm = comm.sort_values(by="작성일시", ascending=False)
+                for _, r in comm.head(20).iterrows():
+                    with st.chat_message("user"):
+                        st.write(f"**{r.get('닉네임')}**: {r.get('내용')}")
+                        st.caption(f"{r.get('작성일시')}")
+        except: st.warning("로딩 중...")
+
+except Exception as e:
+    st.error(f"오류 발생: {e}")
