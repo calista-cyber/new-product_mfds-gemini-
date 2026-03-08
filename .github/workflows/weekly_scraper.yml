@@ -28,9 +28,9 @@ jobs:
           MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
         run: python scraper.py
 
-      - name: 5. AI 데이터 분석 (Gemini - 구글 시트 업데이트)
+      - name: 5. AI 데이터 분석 (ChatGPT - 구글 시트 업데이트)
         env:
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # 🌟 제미니 키가 들어가도록 수정됨!
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # 🌟 제미니 대신 다시 OpenAI 키를 쥐여줍니다!
         run: python ai_analyst.py
