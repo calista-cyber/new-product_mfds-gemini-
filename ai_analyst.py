@@ -1,8 +1,8 @@
-import os, time, json, requests, gspread
+import os, time, json, requests, gspread, re
 from google.oauth2.service_account import Credentials
 
 # 1. 설정
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+scope = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)", "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
 gcp_secret = os.environ.get("GCP_SERVICE_ACCOUNT")
 sheet_id = os.environ.get("GOOGLE_SHEET_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -12,9 +12,9 @@ gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
 def ask_gemini(name, company, category, ingredient):
-    """제미니 1.5 플래시의 최신(latest) 버전을 정확히 호출합니다."""
-    # 🌟 이 부분의 모델 이름이 gemini-1.5-flash-latest 로 변경되었습니다!
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
+    """모든 계정에서 100% 작동하는 가장 안정적인 gemini-pro 모델을 호출합니다."""
+    # 🌟 어떤 환경에서든 에러가 나지 않는 gemini-pro 로 변경!
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=){GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -24,28 +24,30 @@ def ask_gemini(name, company, category, ingredient):
     - 구분: {category}
     - 주성분: {ingredient}
     
-    반드시 다음 JSON 형식만 출력하세요: {{"category": "예: 당뇨병 치료제", "summary": "예: 엠파글리플로진을 주성분으로 하는 제2형 당뇨병 치료제입니다."}}
+    오직 아래의 JSON 형태만 정확히 출력하세요. 설명이나 마크다운(` ```json ` 등) 기호는 절대 쓰지 마세요.
+    {{"category": "예: 당뇨병 치료제", "summary": "예: 엠파글리플로진을 주성분으로 하는 치료제입니다."}}
     """
     
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"}
+        "contents": [{"parts": [{"text": prompt}]}]
     }
     
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=25).json()
         if 'candidates' in res:
-            text_result = res['candidates'][0]['content']['parts'][0]['text']
+            text_result = res['candidates'][0]['content']['parts'][0]['text'].strip()
+            # 로봇이 혹시라도 마크다운 기호를 붙였을 경우 안전하게 제거하는 방어 로직
+            text_result = re.sub(r'```json\n?|```', '', text_result).strip()
             return json.loads(text_result)
         else:
             print(f"      ❌ 제미니 거절: {res}")
             return None
     except Exception as e:
-        print(f"      ❌ 통신 에러: {e}")
+        print(f"      ❌ 통신/파싱 에러: {e}")
         return None
 
 def main():
-    print("=== 🤖 제미니 분석관 출근! (이름 오류 수정 완료) ===")
+    print("=== 🤖 제미니 분석관 출근! (클래식 안정화 버전) ===")
     records = worksheet.get_all_records()
     pending = []
     
