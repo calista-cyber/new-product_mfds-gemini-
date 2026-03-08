@@ -33,9 +33,9 @@ service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 
 def safe_clean(td):
-    """모바일 라벨 글자만 안전하게 지워서 노란색 하이라이트 중복 방지"""
     text = td.get_text(separator=" ", strip=True)
-    labels = ["업체명", "허가일자", "전문/일반", "취소/취하일자", "분류"]
+    # 🌟 "제품명"을 지우개 목록에 추가했습니다!
+    labels = ["제품명", "업체명", "허가일자", "전문/일반", "취소/취하일자", "분류"]
     for label in labels:
         text = text.replace(label, "").strip()
     return text
@@ -61,7 +61,6 @@ def get_detail_info(item_seq):
         th_rv = soup.find("th", string=lambda t: t and "허가심사유형" in t)
         if th_rv: rv_type = th_rv.find_next_sibling("td").text.strip()
         
-        # 🌟 수정 포인트: 상세 웹페이지에서 여러 성분이 뭉치지 않게 쉼표(', ')로 연결되도록 변경
         th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
         if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").get_text(separator=", ", strip=True)
     except: pass
@@ -83,10 +82,8 @@ def run_scraper():
         cols = row.find_all("td")
         if len(cols) < 6: continue
         
-        # 취소/취하일자 검사
         cancel_date = safe_clean(cols[4])
         if cancel_date and re.search(r'\d', cancel_date): 
-            print(f"   ⏩ 취하 제품 제외됨")
             continue
 
         try:
@@ -99,16 +96,17 @@ def run_scraper():
             
             raw_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
             
-            # 🌟 핵심 추가 로직: M코드 삭제 및 성분 간 쉼표(,) 간격 확보
-            clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr) # [M123456] 형태 삭제
-            clean_ingr = clean_ingr.replace('|', ', ').strip() # API의 세로선(|) 기호를 쉼표로 변환
-            clean_ingr = re.sub(r',\s*,', ',', clean_ingr) # 혹시 모를 중복 쉼표 정리
+            clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr)
+            clean_ingr = clean_ingr.replace('|', ', ').strip()
+            clean_ingr = re.sub(r',\s*,', ',', clean_ingr)
             
+            # 🌟 요약 열이 삭제되어 데이터 칸 수를 11칸으로 맞췄습니다.
             new_row = [
                 item_seq, product_name, clean_ingr, safe_clean(cols[2]), 
                 safe_clean(cols[3]), safe_clean(cols[5]), mfg, rv_type, 
                 f'=HYPERLINK("https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}", "클릭")',
-                "", "", today.strftime("%Y-%m-%d %H:%M:%S")
+                "", # J열: AI_분류 (빈칸 대기)
+                today.strftime("%Y-%m-%d %H:%M:%S") # K열: 수집일시
             ]
             
             worksheet.append_row(new_row, value_input_option='USER_ENTERED')
