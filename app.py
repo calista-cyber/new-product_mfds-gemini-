@@ -103,14 +103,26 @@ try:
         else:
             col_v1, col_v2, col_v3 = st.columns(3)
 
-            # 시각화 데이터 가공 함수 (정렬 및 연번 추가)
             def get_chart_data(df_in, col_name):
-                # 건수 기준 내림차순 정렬
                 res = df_in[col_name].value_counts().reset_index()
                 res.columns = [col_name, '건수']
                 res = res.sort_values(by='건수', ascending=False).reset_index(drop=True)
-                # No. 컬럼 추가 (1부터 시작)
                 res.insert(0, 'No.', range(1, len(res) + 1))
                 return res
 
             with col_v1:
+                st.markdown("**1. AI 효능군 (많이 나온 순)**")
+                if 'AI_분류' in df_recent.columns:
+                    cat_df = get_chart_data(df_recent, 'AI_분류').head(10)
+                    st.bar_chart(cat_df.set_index('AI_분류')['건수'], color="#FF4B4B")
+                    st.dataframe(cat_df, hide_index=True, use_container_width=True)
+
+            with col_v2:
+                st.markdown("**2. 허가심사 유형 (많이 나온 순)**")
+                if '허가심사유형' in df_recent.columns:
+                    type_df = get_chart_data(df_recent, '허가심사유형')
+                    st.bar_chart(type_df.set_index('허가심사유형')['건수'], color="#0068C9")
+                    st.dataframe(type_df, hide_index=True, use_container_width=True)
+
+            with col_v3:
+                st.markdown("**3. 주간 주요 성분 Top 10**")
