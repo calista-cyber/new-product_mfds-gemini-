@@ -92,7 +92,7 @@ try:
         # 화면에 표출할 컬럼 선택 및 정렬
         cols_to_show = ["제품명", "주성분", "업체명", "허가일", "전문/일반구분", "허가심사유형", "AI_분류", "상세링크"]
         # 실제 시트에 존재하는 컬럼만 남기기 (에러 방지)
-cols_to_show = [c for c in cols_to_show if c in df_display.columns]
+        cols_to_show = [c for c in cols_to_show if c in df_display.columns]
         
         st.dataframe(
             df_display[cols_to_show],
@@ -148,7 +148,3 @@ try:
         st.text("아직 글이 없습니다. 첫 번째 의견을 남겨주세요!")
 except Exception as e:
     st.warning("게시판 로딩 중...")
-
-
-
-
