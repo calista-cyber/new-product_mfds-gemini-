@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 from openai import OpenAI
 
-# 1. 페이지 설정
+# 1. 페이지 설정 (반드시 가장 상단에 위치)
 st.set_page_config(page_title="의약품 허가 인사이트 대시보드", layout="wide")
 
 # 2. 연결 설정
@@ -98,57 +98,4 @@ try:
         st.divider()
         st.subheader("📈 주간 핵심 지표 시각화 (최근 7일 기준)")
         
-        if df_recent.empty:
-            st.warning("최근 7일 이내에 허가된 데이터가 없어 시각화할 수 없습니다.")
-        else:
-            col_v1, col_v2, col_v3 = st.columns(3)
-
-            # 시각화 데이터 생성 함수 (정렬 및 연번 추가)
-            def get_sorted_counts(df, col_name):
-                counts = df[col_name].value_counts().reset_index()
-                counts.columns = [col_name, '건수']
-                # 숫자가 많은 순서대로 정렬 (이미 내림차순이지만 명시적으로 처리)
-                counts = counts.sort_values(by='건수', ascending=False).reset_index(drop=True)
-                # 연번 추가 (1부터 시작)
-                counts.insert(0, '연번', counts.index + 1)
-                return counts
-
-            with col_v1:
-                st.markdown("**1. AI 효능군 (Top 10)**")
-                if 'AI_분류' in df_recent.columns:
-                    cat_df = get_sorted_counts(df_recent, 'AI_분류').head(10)
-                    # 그래프: 내림차순 정렬 반영
-                    st.bar_chart(cat_df.set_index('AI_분류')['건수'], color="#FF4B4B")
-                    # 표: 연번 반영 및 인덱스 숨김
-                    st.dataframe(cat_df, column_config={"연번": st.column_config.NumberColumn("No.", format="%d")}, hide_index=True, use_container_width=True)
-
-            with col_v2:
-                st.markdown("**2. 허가심사 유형**")
-                if '허가심사유형' in df_recent.columns:
-                    type_df = get_sorted_counts(df_recent, '허가심사유형')
-                    st.bar_chart(type_df.set_index('허가심사유형')['건수'], color="#0068C9")
-                    st.dataframe(type_df, column_config={"연번": st.column_config.NumberColumn("No.", format="%d")}, hide_index=True, use_container_width=True)
-
-            with col_v3:
-                st.markdown("**3. 주요 성분 (Top 10)**")
-                if '주성분' in df_recent.columns:
-                    ing_df = get_sorted_counts(df_recent, '주성분').head(10)
-                    st.bar_chart(ing_df.set_index('주성분')['건수'], color="#29B094")
-                    st.dataframe(ing_df, column_config={"연번": st.column_config.NumberColumn("No.", format="%d")}, hide_index=True, use_container_width=True)
-
-    # --- 탭 2: 데이터 목록 ---
-    with tab2:
-        with st.expander("🔍 상세 검색 및 필터", expanded=True):
-            col_s1, col_s2, col_s3 = st.columns([4, 4, 2])
-            with col_s1:
-                search_name = st.text_input("제품명 또는 주성분 검색")
-            with col_s2:
-                if 'AI_분류' in df.columns:
-                    unique_cats = ["전체"] + sorted([str(c) for c in df['AI_분류'].unique() if c])
-                    selected_cat = st.selectbox("AI 효능군 필터", unique_cats)
-                else:
-                    selected_cat = "전체"
-            with col_s3:
-                if st.button("🔄 데이터 새로고침"):
-                    st.cache_data.clear()
-                    st.rerun()
+        if df_recent.empty
