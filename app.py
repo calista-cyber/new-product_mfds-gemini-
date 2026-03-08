@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytz
 from openai import OpenAI
 
-# 1. 페이지 설정 (가장 먼저 실행되어야 합니다)
+# 1. 페이지 설정 (가장 상단에 위치해야 합니다)
 st.set_page_config(page_title="의약품 허가 인사이트 대시보드", layout="wide")
 
 # 2. 연결 설정 (구글 시트 & OpenAI)
@@ -47,7 +47,7 @@ except Exception as e:
 def load_data():
     data = worksheet_data.get_all_records()
     df = pd.DataFrame(data)
-    # 날짜 형식 변환 (최근 1주일 계산용)
+    # 날짜 형식 변환 (날짜 비교 에러 방지를 위해 pd.to_datetime 사용)
     if '허가일' in df.columns:
         df['허가일_dt'] = pd.to_datetime(df['허가일'], errors='coerce')
     return df
@@ -63,7 +63,7 @@ def get_ai_trend_analysis(df_recent):
     if df_recent.empty:
         return "최근 1주일간 신규 허가된 품목이 없어 분석을 진행할 수 없습니다."
     
-    # 분석용 텍스트 요약 (최대 30개 품목으로 제한)
+    # 분석용 텍스트 요약
     summary_text = ""
     for _, row in df_recent.head(30).iterrows():
         summary_text += f"- 제품명: {row.get('제품명','N/A')}, 성분: {row.get('주성분','N/A')}, 분류: {row.get('AI_분류','N/A')}, 유형: {row.get('허가심사유형','N/A')}\n"
@@ -101,9 +101,9 @@ try:
     # --- 탭 1: 시각화 및 AI 분석 ---
     with tab1:
         st.subheader("🚀 주간 신규 허가 경향 분석 (OpenAI)")
-        # 최근 7일 데이터 필터링 (KST 기준)
-        kst = pytz.timezone('Asia/Seoul')
-        last_7_days = datetime.now(kst) - timedelta(days=7)
+        
+        # [수정됨] 에러 발생 지점: 날짜 비교 형식을 판다스 형식으로 통일
+        last_7_days = pd.Timestamp.now() - pd.Timedelta(days=7)
         df_recent = df[df['허가일_dt'] >= last_7_days]
         
         with st.status("AI 분석관이 트렌드를 파악 중입니다...", expanded=True):
@@ -133,7 +133,7 @@ try:
                 ing_counts = df['주성분'].value_counts().head(10)
                 st.bar_chart(ing_counts, color="#29B094")
 
-    # --- 탭 2: 데이터 목록 (검색 및 상세링크) ---
+    # --- 탭 2: 데이터 목록 ---
     with tab2:
         col_s1, col_s2 = st.columns([8, 2])
         with col_s1:
@@ -145,7 +145,7 @@ try:
                 
         df_display = df.copy()
         
-        # 🔗 품목기준코드를 활용해 실제 식약처 상세페이지 URL 생성
+        # 🔗 상세링크 생성
         if '품목기준코드' in df_display.columns:
             base_url = 'https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq='
             df_display['상세링크'] = base_url + df_display['품목기준코드'].astype(str)
@@ -156,16 +156,13 @@ try:
                 df_display['주성분'].str.contains(search_name, na=False)
             ]
 
-        # 보여줄 컬럼 순서 설정
         cols_to_show = ["제품명", "주성분", "업체명", "허가일", "전문/일반구분", "허가심사유형", "AI_분류", "상세링크"]
-        # 실제 데이터에 있는 컬럼만 필터링
         cols_to_show = [c for c in cols_to_show if c in df_display.columns]
         
         st.dataframe(
             df_display[cols_to_show],
             column_config={
-                "상세링크": st.column_config.LinkColumn("상세보기", display_text="식약처 바로가기"),
-                "허가일": st.column_config.DateColumn("허가일")
+                "상세링크": st.column_config.LinkColumn("상세보기", display_text="식약처 바로가기")
             },
             hide_index=True, 
             use_container_width=True
@@ -178,36 +175,34 @@ try:
         with st.form("ha_money_form", clear_on_submit=True):
             col_input1, col_input2 = st.columns([1, 4])
             with col_input1:
-                nickname = st.text_input("닉네임", placeholder="익명")
+                u_nick = st.text_input("닉네임", placeholder="익명")
             with col_input2:
-                content = st.text_input("내용", placeholder="이 약의 미래 가치는 어떨까요?")
+                u_content = st.text_input("내용", placeholder="이 약의 미래 가치는 어떨까요?")
             
             submit_btn = st.form_submit_button("의견 등록 💬")
             
-            if submit_btn and content:
+            if submit_btn and u_content:
                 try:
                     kst = pytz.timezone('Asia/Seoul')
                     now_str = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
-                    user_nick = nickname if nickname else "익명"
-                    worksheet_comments.append_row([now_str, user_nick, content])
+                    user_nick = u_nick if u_nick else "익명"
+                    worksheet_comments.append_row([now_str, user_nick, u_content])
                     st.success("등록되었습니다! 💸")
                     time.sleep(1) 
                     st.rerun()    
                 except Exception as e:
                     st.error(f"등록 실패: {e}")
 
-        # 게시판 내용 불러오기
         try:
             comments_df = load_comments()
             if not comments_df.empty:
-                # 최신글이 위로 오도록 정렬
                 comments_df = comments_df.sort_values(by="작성일시", ascending=False)
                 for _, row in comments_df.head(20).iterrows():
                     with st.chat_message("user"):
                         st.write(f"**{row.get('닉네임', '익명')}**: {row.get('내용', '')}")
                         st.caption(f"{row.get('작성일시', '')}")
             else:
-                st.text("아직 등록된 의견이 없습니다. 첫 의견을 남겨보세요!")
+                st.text("아직 등록된 의견이 없습니다.")
         except Exception:
             st.warning("게시판 데이터를 불러오는 중입니다...")
 
