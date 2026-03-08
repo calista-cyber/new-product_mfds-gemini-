@@ -18,7 +18,7 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정 (최근 7일)
+# 2. 날짜 설정 (최근 7일 검색용)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=7) 
@@ -32,47 +32,42 @@ chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 
-def clean_data(td):
-    """중복 텍스트 방지: span 태그를 제거하고 순수 데이터만 추출"""
-    soup = BeautifulSoup(str(td), "html.parser")
-    for span in soup.find_all("span"): span.decompose()
-    return soup.get_text(strip=True)
+def safe_clean(td):
+    """모바일 라벨 글자만 안전하게 지워서 노란색 하이라이트 중복 방지"""
+    text = td.get_text(separator=" ", strip=True)
+    labels = ["업체명", "허가일자", "전문/일반", "취소/취하일자", "분류"]
+    for label in labels:
+        text = text.replace(label, "").strip()
+    return text
 
 def get_api_data(item_seq):
-    """API를 통해 주성분과 허가일자 확보"""
     api_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {"serviceKey": urllib.parse.unquote(mfds_api_key), "item_seq": item_seq, "type": "json"}
     try:
         res = requests.get(api_url, params=params, timeout=10).json()
-        item = res["body"]["items"][0]
-        return {"ingr": item.get("MAIN_ITEM_INGR", "")}
+        return {"ingr": res["body"]["items"][0].get("MAIN_ITEM_INGR", "")}
     except: return None
 
 def get_detail_info(item_seq):
-    """상세 페이지에서 위탁제조업체, 허가심사유형, 주성분(보조) 수집"""
     url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
     driver.get(url)
-    time.sleep(2) # 상세 페이지 로딩 대기
+    time.sleep(1.5)
     soup = BeautifulSoup(driver.page_source, "html.parser")
-    
-    mfg, rv_type, ingr = "", "", ""
+    mfg, rv_type, detail_ingr = "", "", ""
     try:
-        # 위탁제조업체 찾기
         th_mfg = soup.find("th", string=lambda t: t and "위탁제조업체" in t)
         if th_mfg: mfg = th_mfg.find_next_sibling("td").text.strip()
         
-        # 허가심사유형 찾기
         th_rv = soup.find("th", string=lambda t: t and "허가심사유형" in t)
         if th_rv: rv_type = th_rv.find_next_sibling("td").text.strip()
         
-        # 주성분(API 실패 대비)
         th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
-        if th_ingr: ingr = th_ingr.find_next_sibling("td").text.strip()
+        if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").text.strip()
     except: pass
-    return mfg, rv_type, ingr
+    return mfg, rv_type, detail_ingr
 
 def run_scraper():
-    print(f"=== 🚀 보완 완료 버전 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
+    print(f"=== 🚀 직관적 필터링 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
     search_url = (f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?page=1&limit=100&searchYn=true&sDateGb=date&"
                   f"sYear={today.year}&sMonth={today.month}&sPermitDateStart={start_date.strftime('%Y-%m-%d')}&"
                   f"sPermitDateEnd={today.strftime('%Y-%m-%d')}&btnSearch=")
@@ -87,22 +82,25 @@ def run_scraper():
         cols = row.find_all("td")
         if len(cols) < 6: continue
         
-        if re.search(r'\d', clean_data(cols[4])): continue # 취하 제품 패스
+        # 🛡️ 팀장님 제안 로직: '취소/취하일자' 칸에 숫자가 있으면 가차 없이 패스!
+        cancel_date = safe_clean(cols[4])
+        if cancel_date and re.search(r'\d', cancel_date): 
+            print(f"   ⏩ 취하 제품 제외됨")
+            continue
 
         try:
             item_seq = re.search(r"(\d{9})", str(cols[1].find("a"))).group(1)
             if item_seq in existing_seqs: continue
             
-            # 상세 정보 수집 (API + 페이지 크롤링)
+            product_name = safe_clean(cols[1])
             api = get_api_data(item_seq)
             mfg, rv_type, detail_ingr = get_detail_info(item_seq)
             
-            # 주성분 결정 (API 우선, 안되면 상세페이지 데이터)
             final_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
             
             new_row = [
-                item_seq, clean_data(cols[1]), final_ingr, clean_data(cols[2]), 
-                clean_data(cols[3]), clean_data(cols[5]), mfg, rv_type, 
+                item_seq, product_name, final_ingr, safe_clean(cols[2]), 
+                safe_clean(cols[3]), safe_clean(cols[5]), mfg, rv_type, 
                 f'=HYPERLINK("https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}", "클릭")',
                 "", "", today.strftime("%Y-%m-%d %H:%M:%S")
             ]
@@ -110,7 +108,7 @@ def run_scraper():
             worksheet.append_row(new_row, value_input_option='USER_ENTERED')
             existing_seqs.append(item_seq)
             count += 1
-            print(f"   ✅ 보완 수집 완료: {clean_data(cols[1])}")
+            print(f"   ✅ 수집됨: {product_name}")
         except: continue
 
     print(f"🏁 신규 {count}건 업데이트 완료!")
