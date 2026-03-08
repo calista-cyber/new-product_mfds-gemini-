@@ -1,20 +1,17 @@
 import os, time, json, requests, gspread, re
-from google.oauth2.service_account import Credentials
 
 # 1. 설정
-scope = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)", "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
 gcp_secret = os.environ.get("GCP_SERVICE_ACCOUNT")
 sheet_id = os.environ.get("GOOGLE_SHEET_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scopes=scope)
-gc = gspread.authorize(credentials)
+# 🌟 구글 시트 인증 (가장 안정적인 gspread 내장 프리패스 함수로 교체!)
+gc = gspread.service_account_from_dict(json.loads(gcp_secret))
 worksheet = gc.open_by_key(sheet_id).sheet1
 
 def ask_gemini(name, company, category, ingredient):
     """모든 계정에서 100% 작동하는 가장 안정적인 gemini-pro 모델을 호출합니다."""
-    # 🌟 어떤 환경에서든 에러가 나지 않는 gemini-pro 로 변경!
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=){GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -47,7 +44,7 @@ def ask_gemini(name, company, category, ingredient):
         return None
 
 def main():
-    print("=== 🤖 제미니 분석관 출근! (클래식 안정화 버전) ===")
+    print("=== 🤖 제미니 분석관 출근! (인증 에러 완전 해결 버전) ===")
     records = worksheet.get_all_records()
     pending = []
     
