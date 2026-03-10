@@ -10,7 +10,7 @@ from openai import OpenAI
 # 1. 페이지 설정
 st.set_page_config(page_title="의약품 허가 인사이트 대시보드", layout="wide")
 
-# 2. 연결 설정
+# 2. 연결 설정 함수
 @st.cache_resource
 def init_connections():
     try:
@@ -22,9 +22,11 @@ def init_connections():
         st.error(f"연결 설정 중 오류 발생: {e}")
         st.stop()
 
+# 연결 실행
 gc, ai_client = init_connections()
 sheet_id = st.secrets["GOOGLE_SHEET_ID"]
 
+# 시트 데이터 불러오기
 try:
     doc = gc.open_by_key(sheet_id)
     worksheet_data = doc.sheet1
@@ -34,10 +36,10 @@ try:
         worksheet_comments = doc.add_worksheet(title="HA_money", rows="1000", cols="3")
         worksheet_comments.append_row(["작성일시", "닉네임", "내용"])
 except Exception as e:
-    st.error(f"시트 접근 실패: {e}")
+    st.error(f"구글 시트 접근 실패: {e}")
     st.stop()
 
-# 3. 데이터 로드 함수 (허가 데이터는 10분 유지)
+# 3. 데이터 로드 함수
 @st.cache_data(ttl=600)
 def load_data():
     data = worksheet_data.get_all_records()
@@ -46,7 +48,6 @@ def load_data():
         df['허가일_dt'] = pd.to_datetime(df['허가일'], errors='coerce')
     return df
 
-# [수정] 게시판 데이터는 5초만 유지 (실시간 반영을 위해)
 @st.cache_data(ttl=5)
 def load_comments():
     data = worksheet_comments.get_all_records()
@@ -65,7 +66,7 @@ def get_ai_analysis(df_recent):
         res = ai_client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
         return res.choices[0].message.content
     except:
-        return "AI 분석관이 자리를 비웠습니다. 잠시 후 다시 시도해주세요."
+        return "AI 분석을 불러올 수 없습니다."
 
 # --- 메인 화면 시작 ---
 st.title("💊 의약품 허가 트렌드 대시보드")
@@ -74,25 +75,29 @@ try:
     df = load_data()
     tab1, tab2, tab3 = st.tabs(["📊 인사이트 분석", "📋 허가 데이터 목록", "💰 HA_money"])
 
-    last_7_days = pd.Timestamp.now() - pd.Timedelta(days=7)
-    df_recent = df[df['허가일_dt'] >= last_7_days]
+    # [💡 핵심 수정 사항] 현재 시간이 아닌 "데이터에 있는 가장 최근 날짜" 기준 1주일로 변경
+    if not df.empty and '허가일_dt' in df.columns:
+        latest_date = df['허가일_dt'].max() # 시트에 있는 가장 최신 허가일 찾기
+        start_date = latest_date - pd.Timedelta(days=7) # 그 날짜로부터 딱 7일 전 날짜 계산
+        df_recent = df[df['허가일_dt'] >= start_date]
+    else:
+        df_recent = pd.DataFrame()
 
     # --- 탭 1: 인사이트 분석 ---
     with tab1:
-        st.subheader("🚀 주간 신규 허가 경향 분석 (AI)")
+        st.subheader("🚀 가장 최근 업데이트 주간의 허가 경향 분석 (AI)")
         with st.status("AI 분석 진행 중...", expanded=True):
             st.markdown(get_ai_analysis(df_recent))
         
         st.divider()
-        st.subheader("📈 주간 핵심 지표 (최근 7일 기준)")
+        st.subheader("📈 최근 주간 핵심 지표")
         
         if df_recent.empty:
-            st.warning("최근 7일간 데이터가 없습니다.")
+            st.warning("분석할 데이터가 없습니다.")
         else:
             col_v1, col_v2, col_v3 = st.columns(3)
 
             def make_summary(df_in, col_name):
-                # 건수 기준 정렬 및 No. 부여
                 res = df_in[col_name].value_counts().reset_index()
                 res.columns = [col_name, '건수']
                 res = res.sort_values(by='건수', ascending=False).reset_index(drop=True)
@@ -114,7 +119,7 @@ try:
                     st.dataframe(t_df, hide_index=True, use_container_width=True)
 
             with col_v3:
-                st.markdown("**3. 주간 주요 성분 Top 10**")
+                st.markdown("**3. 주요 성분 Top 10**")
                 if '주성분' in df_recent.columns:
                     i_df = make_summary(df_recent, '주성분').head(10)
                     st.bar_chart(i_df.set_index('주성분')['건수'], color="#29B094")
@@ -145,7 +150,6 @@ try:
         if sel_cat != "전체":
             df_list = df_list[df_list['AI_분류'] == sel_cat]
 
-        # 연번 부여
         df_list = df_list.reset_index(drop=True)
         df_list.index = df_list.index + 1
         df_list.insert(0, 'No.', df_list.index)
@@ -160,7 +164,7 @@ try:
             hide_index=True, use_container_width=True
         )
 
-    # --- 탭 3: HA_money 게시판 ---
+    # --- 탭 3: 게시판 ---
     with tab3:
         st.info("이 약들의 시장성과 전망에 대해 자유롭게 이야기 나눠보세요! (실시간 반영)")
         with st.form("ha_form", clear_on_submit=True):
@@ -180,7 +184,6 @@ try:
         try:
             comm = load_comments()
             if not comm.empty:
-                # 최신글 순 정렬
                 comm = comm.sort_values(by="작성일시", ascending=False)
                 for _, r in comm.head(20).iterrows():
                     with st.chat_message("user"):
