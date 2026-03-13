@@ -2,7 +2,8 @@ name: Weekly Drug Approval & AI Analysis
 
 on:
   schedule:
-    - cron: '0 12 * * 5' # 매주 금요일 오후 9시 (KST)
+    # 한국 시간 금요일 22:00 (UTC 13:00) 맞춰둠!
+    - cron: '0 13 * * 5'
   workflow_dispatch: # 수동 실행 버튼
 
 jobs:
@@ -17,20 +18,25 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 3. 필수 라이브러리 설치
-        run: |
-          pip install requests beautifulsoup4 gspread google-auth selenium webdriver-manager
+      # 가상 서버에 크롬 브라우저 설치 (에러 방지용)
+      - name: 3. 크롬 브라우저 설치
+        uses: browser-actions/setup-chrome@latest
 
-      - name: 4. 데이터 수집 (Scraper - 식약처 & 구글 시트)
+      # 누락되었던 openai 라이브러리 추가!
+      - name: 4. 필수 라이브러리 설치
+        run: |
+          pip install requests beautifulsoup4 gspread google-auth selenium webdriver-manager openai pytz
+
+      - name: 5. 데이터 수집 (Scraper)
         env:
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
         run: python scraper.py
 
-      - name: 5. AI 데이터 분석 (ChatGPT - 구글 시트 업데이트)
+      - name: 6. AI 데이터 분석 (OpenAI)
         env:
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} # 🌟 제미니 대신 다시 OpenAI 키를 쥐여줍니다!
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python ai_analyst.py
