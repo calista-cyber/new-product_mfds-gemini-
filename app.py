@@ -39,7 +39,7 @@ except Exception as e:
     st.error(f"구글 시트 접근 실패: {e}")
     st.stop()
 
-# 3. 데이터 로드 함수 [💡수정: 최신 날짜가 위로 오도록 내림차순 정렬]
+# 3. 데이터 로드 함수 (최신 날짜가 위로 오도록 내림차순 정렬)
 @st.cache_data(ttl=600)
 def load_data():
     data = worksheet_data.get_all_records()
@@ -55,7 +55,7 @@ def load_comments():
     data = worksheet_comments.get_all_records()
     return pd.DataFrame(data)
 
-# AI 분석 함수 [💡수정: 주간(weekly)과 전체(total) 모드 분리]
+# AI 분석 함수 (비용 절감을 위해 ttl 제거, 주간/전체 모드 분리)
 @st.cache_data
 def get_ai_analysis(df_input, mode="weekly"):
     if df_input.empty:
@@ -95,7 +95,7 @@ try:
     # --- 탭 1: 인사이트 분석 ---
     with tab1:
         # [섹션 1: 주간 인사이트]
-        st.subheader("🚀 최근 주간 핵심 허가 트렌드")
+        st.subheader("🚀 주간 핵심 허가 트렌드")
         with st.status("주간 트렌드 분석 중...", expanded=True):
             st.markdown(get_ai_analysis(df_recent, mode="weekly"))
         
@@ -107,40 +107,75 @@ try:
             st.info(get_ai_analysis(df, mode="total"))
             
         st.divider()
+
+        # [🌟 젬밍이 팁] 주간/누적 그래프가 모두 쓸 수 있도록 요약 함수를 바깥으로 뺐습니다!
+        def make_summary(df_in, col_name):
+            res = df_in[col_name].value_counts().reset_index()
+            res.columns = [col_name, '건수']
+            res = res.sort_values(by='건수', ascending=False).reset_index(drop=True)
+            res.insert(0, 'No.', range(1, len(res) + 1))
+            return res
         
-        st.subheader("📈 최근 주간 핵심 지표")
+        # [섹션 3: 주간 핵심 지표]
+        st.subheader("📈 주간 핵심 지표")
         if df_recent.empty:
-            st.warning("분석할 데이터가 없습니다.")
+            st.warning("분석할 최근 주간 데이터가 없습니다.")
         else:
             col_v1, col_v2, col_v3 = st.columns(3)
 
-            def make_summary(df_in, col_name):
-                res = df_in[col_name].value_counts().reset_index()
-                res.columns = [col_name, '건수']
-                res = res.sort_values(by='건수', ascending=False).reset_index(drop=True)
-                res.insert(0, 'No.', range(1, len(res) + 1))
-                return res
-
             with col_v1:
-                st.markdown("**1. AI 효능군 (많이 나온 순)**")
+                st.markdown("**1. 주간 AI 효능군 (많이 나온 순)**")
                 if 'AI_분류' in df_recent.columns:
                     c_df = make_summary(df_recent, 'AI_분류').head(10)
                     st.bar_chart(c_df.set_index('AI_분류')['건수'], color="#FF4B4B")
                     st.dataframe(c_df, hide_index=True, use_container_width=True)
 
             with col_v2:
-                st.markdown("**2. 허가심사 유형**")
+                st.markdown("**2. 주간 허가심사 유형**")
                 if '허가심사유형' in df_recent.columns:
                     t_df = make_summary(df_recent, '허가심사유형')
                     st.bar_chart(t_df.set_index('허가심사유형')['건수'], color="#0068C9")
                     st.dataframe(t_df, hide_index=True, use_container_width=True)
 
             with col_v3:
-                st.markdown("**3. 주요 성분 Top 10**")
+                st.markdown("**3. 주간 주요 성분 Top 10**")
                 if '주성분' in df_recent.columns:
                     i_df = make_summary(df_recent, '주성분').head(10)
                     st.bar_chart(i_df.set_index('주성분')['건수'], color="#29B094")
                     st.dataframe(i_df, hide_index=True, use_container_width=True)
+
+        st.divider()
+
+        # [섹션 4: 누적 핵심 지표 Top 10]
+        st.subheader("📊 누적 데이터 핵심 지표 (Top 10)")
+        if df.empty:
+            st.warning("분석할 누적 데이터가 없습니다.")
+        else:
+            col_t1, col_t2, col_t3 = st.columns(3)
+
+            with col_t1:
+                st.markdown("**1. 누적 AI 효능군 (Top 10)**")
+                if 'AI_분류' in df.columns:
+                    c_df_total = make_summary(df, 'AI_분류').head(10)
+                    # 시각적 구분을 위해 코랄색(#FF7F50) 적용
+                    st.bar_chart(c_df_total.set_index('AI_분류')['건수'], color="#FF7F50") 
+                    st.dataframe(c_df_total, hide_index=True, use_container_width=True)
+
+            with col_t2:
+                st.markdown("**2. 누적 허가심사 유형 (Top 10)**")
+                if '허가심사유형' in df.columns:
+                    t_df_total = make_summary(df, '허가심사유형').head(10)
+                    # 콘플라워 블루(#6495ED) 적용
+                    st.bar_chart(t_df_total.set_index('허가심사유형')['건수'], color="#6495ED") 
+                    st.dataframe(t_df_total, hide_index=True, use_container_width=True)
+
+            with col_t3:
+                st.markdown("**3. 누적 주요 성분 (Top 10)**")
+                if '주성분' in df.columns:
+                    i_df_total = make_summary(df, '주성분').head(10)
+                    # 골든로드(#DAA520) 적용
+                    st.bar_chart(i_df_total.set_index('주성분')['건수'], color="#DAA520") 
+                    st.dataframe(i_df_total, hide_index=True, use_container_width=True)
 
     # --- 탭 2: 데이터 목록 ---
     with tab2:
