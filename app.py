@@ -95,14 +95,14 @@ try:
     # --- 탭 1: 인사이트 분석 ---
     with tab1:
         # [섹션 1: 주간 인사이트]
-        st.subheader("🚀 이번 주 핵심 허가 트렌드 (최근 7일 기준)")
+        st.subheader("🚀 최근 주간 핵심 허가 트렌드")
         with st.status("주간 트렌드 분석 중...", expanded=True):
             st.markdown(get_ai_analysis(df_recent, mode="weekly"))
         
         st.divider()
         
         # [섹션 2: 전체 인사이트 추가]
-        st.subheader("🌍 누적 데이터 요약 (전체 시장 흐름)")
+        st.subheader("🌍 누적 데이터 허가 트렌드")
         with st.container(border=True):
             st.info(get_ai_analysis(df, mode="total"))
             
