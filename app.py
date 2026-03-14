@@ -56,7 +56,7 @@ def load_comments():
     return pd.DataFrame(data)
 
 # AI 분석 함수 [💡수정: 주간(weekly)과 전체(total) 모드 분리]
-@st.cache_data(ttl=3600)
+@st.cache_data
 def get_ai_analysis(df_input, mode="weekly"):
     if df_input.empty:
         return "분석할 데이터가 없습니다."
