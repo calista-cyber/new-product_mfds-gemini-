@@ -39,13 +39,15 @@ except Exception as e:
     st.error(f"구글 시트 접근 실패: {e}")
     st.stop()
 
-# 3. 데이터 로드 함수
+# 3. 데이터 로드 함수 [💡수정: 최신 날짜가 위로 오도록 내림차순 정렬]
 @st.cache_data(ttl=600)
 def load_data():
     data = worksheet_data.get_all_records()
     df = pd.DataFrame(data)
     if '허가일' in df.columns:
         df['허가일_dt'] = pd.to_datetime(df['허가일'], errors='coerce')
+        # 허가일 기준 내림차순 정렬 (최신 허가가 1번으로 옴)
+        df = df.sort_values(by='허가일_dt', ascending=False).reset_index(drop=True)
     return df
 
 @st.cache_data(ttl=5)
@@ -53,15 +55,22 @@ def load_comments():
     data = worksheet_comments.get_all_records()
     return pd.DataFrame(data)
 
-# AI 분석 함수
+# AI 분석 함수 [💡수정: 주간(weekly)과 전체(total) 모드 분리]
 @st.cache_data(ttl=3600)
-def get_ai_analysis(df_recent):
-    if df_recent.empty:
-        return "최근 1주일간 신규 허가 데이터가 없습니다."
+def get_ai_analysis(df_input, mode="weekly"):
+    if df_input.empty:
+        return "분석할 데이터가 없습니다."
+    
     summary = ""
-    for _, row in df_recent.head(30).iterrows():
+    for _, row in df_input.head(30).iterrows():
         summary += f"- {row.get('제품명')}({row.get('주성분')}): {row.get('AI_분류')}\n"
-    prompt = f"다음 의약품 허가 목록을 바탕으로 주간 트렌드와 인사이트를 제약 전문가 입장에서 요약해줘:\n{summary}"
+    
+    if mode == "weekly":
+        prompt = f"다음 주간 의약품 허가 목록을 바탕으로 제약 전문가 입장에서 핵심 트렌드 3가지를 요약해줘:\n{summary}"
+    else:
+        # 전체 데이터 분석 시 5줄 내외로 제한
+        prompt = f"다음 누적 허가 데이터를 바탕으로 전체 시장의 흐름과 전망을 딱 5줄 내외로 짧고 명확하게 요약해줘:\n{summary}"
+        
     try:
         res = ai_client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
         return res.choices[0].message.content
@@ -75,23 +84,31 @@ try:
     df = load_data()
     tab1, tab2, tab3 = st.tabs(["📊 인사이트 분석", "📋 허가 데이터 목록", "💰 HA_money"])
 
-    # [💡 핵심 수정 사항] 현재 시간이 아닌 "데이터에 있는 가장 최근 날짜" 기준 1주일로 변경
+    # "데이터에 있는 가장 최근 날짜" 기준 1주일 필터링
     if not df.empty and '허가일_dt' in df.columns:
-        latest_date = df['허가일_dt'].max() # 시트에 있는 가장 최신 허가일 찾기
-        start_date = latest_date - pd.Timedelta(days=7) # 그 날짜로부터 딱 7일 전 날짜 계산
+        latest_date = df['허가일_dt'].max() 
+        start_date = latest_date - pd.Timedelta(days=7) 
         df_recent = df[df['허가일_dt'] >= start_date]
     else:
         df_recent = pd.DataFrame()
 
     # --- 탭 1: 인사이트 분석 ---
     with tab1:
-        st.subheader("🚀 가장 최근 업데이트 주간의 허가 경향 분석 (AI)")
-        with st.status("AI 분석 진행 중...", expanded=True):
-            st.markdown(get_ai_analysis(df_recent))
+        # [섹션 1: 주간 인사이트]
+        st.subheader("🚀 이번 주 핵심 허가 트렌드 (최근 7일 기준)")
+        with st.status("주간 트렌드 분석 중...", expanded=True):
+            st.markdown(get_ai_analysis(df_recent, mode="weekly"))
         
         st.divider()
-        st.subheader("📈 최근 주간 핵심 지표")
         
+        # [섹션 2: 전체 인사이트 추가]
+        st.subheader("🌍 누적 데이터 요약 (전체 시장 흐름)")
+        with st.container(border=True):
+            st.info(get_ai_analysis(df, mode="total"))
+            
+        st.divider()
+        
+        st.subheader("📈 최근 주간 핵심 지표")
         if df_recent.empty:
             st.warning("분석할 데이터가 없습니다.")
         else:
@@ -150,6 +167,7 @@ try:
         if sel_cat != "전체":
             df_list = df_list[df_list['AI_분류'] == sel_cat]
 
+        # 연번 매기기 (이미 내림차순 정렬된 상태에서 1번부터 쫙 붙습니다!)
         df_list = df_list.reset_index(drop=True)
         df_list.index = df_list.index + 1
         df_list.insert(0, 'No.', df_list.index)
@@ -157,7 +175,7 @@ try:
         show_cols = ["No.", "제품명", "주성분", "업체명", "허가일", "전문/일반구분", "허가심사유형", "AI_분류", "상세링크"]
         available = [c for c in show_cols if c in df_list.columns]
         
-        st.write(f"총 **{len(df_list)}**건")
+        st.write(f"총 **{len(df_list)}**건 (최신 허가일 기준 정렬)")
         st.dataframe(
             df_list[available],
             column_config={"상세링크": st.column_config.LinkColumn("상세보기", display_text="식약처 바로가기"), "No.": st.column_config.NumberColumn("No.", format="%d")},
