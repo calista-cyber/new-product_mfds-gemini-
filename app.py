@@ -39,14 +39,27 @@ except Exception as e:
     st.error(f"구글 시트 접근 실패: {e}")
     st.stop()
 
-# 3. 데이터 로드 함수 (최신 날짜가 위로 오도록 내림차순 정렬)
+# 3. 데이터 로드 함수 (성분명 정규화 및 내림차순 정렬 포함)
 @st.cache_data(ttl=600)
 def load_data():
     data = worksheet_data.get_all_records()
     df = pd.DataFrame(data)
+
+    # [🌟 핵심 수정] 주성분명 정규화 (A, B -> B, A 중복 방지)
+    if '주성분' in df.columns:
+        def normalize_ing(text):
+            if not text or pd.isna(text):
+                return text
+            # 쉼표로 분리 -> 공백 제거 -> 가나다순 정렬 -> 다시 쉼표로 결합
+            parts = [p.strip() for p in str(text).split(',')]
+            parts.sort()
+            return ', '.join(parts)
+        
+        df['주성분'] = df['주성분'].apply(normalize_ing)
+
+    # 날짜 처리 및 내림차순 정렬
     if '허가일' in df.columns:
         df['허가일_dt'] = pd.to_datetime(df['허가일'], errors='coerce')
-        # 허가일 기준 내림차순 정렬 (최신 허가가 1번으로 옴)
         df = df.sort_values(by='허가일_dt', ascending=False).reset_index(drop=True)
     return df
 
@@ -108,7 +121,7 @@ try:
             
         st.divider()
 
-        # [🌟 젬밍이 팁] 주간/누적 그래프가 모두 쓸 수 있도록 요약 함수를 바깥으로 뺐습니다!
+        # [🌟 팁] 주간/누적 그래프가 모두 쓸 수 있도록 요약 함수를 바깥으로 뺐습니다!
         def make_summary(df_in, col_name):
             res = df_in[col_name].value_counts().reset_index()
             res.columns = [col_name, '건수']
@@ -202,7 +215,7 @@ try:
         if sel_cat != "전체":
             df_list = df_list[df_list['AI_분류'] == sel_cat]
 
-        # 연번 매기기 (이미 내림차순 정렬된 상태에서 1번부터 쫙 붙습니다!)
+        # 연번 매기기
         df_list = df_list.reset_index(drop=True)
         df_list.index = df_list.index + 1
         df_list.insert(0, 'No.', df_list.index)
