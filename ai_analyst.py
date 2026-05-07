@@ -63,9 +63,9 @@ def ask_chatgpt(name, company, category, ingredient, efficacy_text=""):
     - 제품명: {name} / 주성분: {ingredient}
     """
     
-    # 신약/자료제출의약품인 경우 추출된 효능효과 데이터를 프롬프트에 추가
+    # 신약/자료제출의약품/유전자치료제인 경우 추출된 효능효과 데이터를 프롬프트에 추가
     if efficacy_text:
-        prompt += f"\n- [중요 분석 조건]: 이 의약품은 신약 또는 자료제출의약품입니다. 아래 실제 효능효과 텍스트를 분석하여 분류의 최우선 근거로 삼으세요.\n[효능효과 데이터]: {efficacy_text}\n"
+        prompt += f"\n- [중요 분석 조건]: 이 의약품은 신약, 유전자치료제 또는 자료제출의약품입니다. 아래 실제 효능효과 텍스트를 분석하여 분류의 최우선 근거로 삼으세요.\n[효능효과 데이터]: {efficacy_text}\n"
     
     prompt += '\n형식: {"category": "분류명"}'
     
@@ -123,8 +123,8 @@ def main():
             print(f"   🧠 [AI 분석 중] {name} (유형: {approval_type})...")
             
             efficacy_text = ""
-            if approval_type in ["신약", "자료제출의약품"] and detail_link:
-                print(f"      🔗 상세링크 텍스트 스크래핑 진행 중...")
+            if ("신약" in approval_type or "자료제출의약품" in approval_type or "유전자치료제" in approval_type) and detail_link:
+                print(f"      🔗 상세링크 텍스트 스크래핑 진행 중... (유형: {approval_type})")
                 efficacy_text = extract_efficacy_text(detail_link)
 
             res = ask_chatgpt(name, d.get('업체명', ''), d.get('전문/일반구분', ''), ingredient, efficacy_text)
