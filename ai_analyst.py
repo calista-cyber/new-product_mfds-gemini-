@@ -1,4 +1,5 @@
 import os, time, json, requests, gspread
+from bs4 import BeautifulSoup
 
 # 1. 설정
 gcp_secret = os.environ.get("GCP_SERVICE_ACCOUNT")
@@ -20,7 +21,6 @@ def get_fixed_mapping():
     try:
         mapping_ws = doc.worksheet("매핑사전")
         data = mapping_ws.get_all_records()
-        # { "성분명": "분류명" } 형태로 변환
         mapping_dict = { str(row['성분명']).strip(): str(row['분류명']).strip() for row in data if row.get('성분명') }
         print(f"📚 매핑사전 로드 완료: {len(mapping_dict)}개 규칙 적용")
         return mapping_dict
@@ -28,7 +28,22 @@ def get_fixed_mapping():
         print(f"⚠️ '매핑사전' 탭을 찾을 수 없거나 데이터가 비어있습니다. (Error: {e})")
         return {}
 
-def ask_chatgpt(name, company, category, ingredient):
+def extract_efficacy_text(url):
+    """상세링크에서 웹페이지 텍스트를 추출합니다."""
+    if not url or not str(url).startswith('http'):
+        return ""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=10)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+        text = soup.get_text(separator=' ', strip=True)
+        return text[:1500] # API 토큰 낭비 방지를 위해 최대 1500자 제한
+    except Exception as e:
+        print(f"      ⚠️ 링크 텍스트 수집 실패: {e}")
+        return ""
+
+def ask_chatgpt(name, company, category, ingredient, efficacy_text=""):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}", 
@@ -46,9 +61,13 @@ def ask_chatgpt(name, company, category, ingredient):
 
     [의약품 정보]
     - 제품명: {name} / 주성분: {ingredient}
-    
-    형식: {{"category": "분류명"}}
     """
+    
+    # 신약/자료제출의약품인 경우 추출된 효능효과 데이터를 프롬프트에 추가
+    if efficacy_text:
+        prompt += f"\n- [중요 분석 조건]: 이 의약품은 신약 또는 자료제출의약품입니다. 아래 실제 효능효과 텍스트를 분석하여 분류의 최우선 근거로 삼으세요.\n[효능효과 데이터]: {efficacy_text}\n"
+    
+    prompt += '\n형식: {"category": "분류명"}'
     
     payload = {
         "model": "gpt-4o-mini",
@@ -63,57 +82,64 @@ def ask_chatgpt(name, company, category, ingredient):
         return None
 
 def main():
-    print("=== 🤖 하이브리드 AI 분석관 가동 ===")
+    print("=== 🤖 하이브리드 AI 분석관 가동 (효능효과 정밀 분석 모드) ===")
     
-    # 1. 매핑 사전 로드
     FIXED_MAPPING = get_fixed_mapping()
     
-    # 2. 분석 대기 데이터 로드
     records = worksheet.get_all_records()
     pending = [{"row_num": i + 2, "data": r} for i, r in enumerate(records) if not str(r.get("AI_분류", "")).strip()]
     
-    if not pending: return print(">> 모든 데이터가 이미 분류되어 있습니다. 🎉")
+    if not pending: return print(">> 모든 데이터가 이미 분류되어 있습니다.")
 
     print(f">> 분석 시작: 총 {len(pending)}건")
     
-    # 이번 실행 중 분석한 성분을 기억하는 임시 캐시 (동일 성분 중복 호출 방지)
     session_cache = {}
 
     for item in pending:
         r_num, d = item["row_num"], item["data"]
-        name, ingredient = d.get('제품명', ''), str(d.get('주성분', '')).strip()
+        name = d.get('제품명', '')
+        ingredient = str(d.get('주성분', '')).strip()
+        approval_type = str(d.get('허가심사유형', '')).strip()
+        detail_link = str(d.get('상세링크', '')).strip()
+
         if not name: continue 
 
         final_cat = None
 
-        # [Step 1] 구글 시트 매핑사전에서 확인
+        # 1. 시트 매핑사전 확인
         for key, val in FIXED_MAPPING.items():
-            if key in ingredient: # 성분명에 키워드가 포함되면
+            if key in ingredient:
                 final_cat = val
                 print(f"   ⚡ [사전 적용] {name} -> {final_cat}")
                 break
         
-        # [Step 2] 이번 실행 중에 이미 분석한 성분인지 확인 (세션 캐시)
+        # 2. 세션 캐시 확인
         if not final_cat and ingredient in session_cache:
             final_cat = session_cache[ingredient]
             print(f"   ♻️ [캐시 재사용] {name} -> {final_cat}")
 
-        # [Step 3] 사전/캐시에 모두 없으면 AI에게 질문
+        # 3. AI 분석 진행
         if not final_cat:
-            print(f"   🧠 [AI 분석 중] {name}...")
-            res = ask_chatgpt(name, d.get('업체명', ''), d.get('전문/일반구분', ''), ingredient)
+            print(f"   🧠 [AI 분석 중] {name} (유형: {approval_type})...")
+            
+            efficacy_text = ""
+            if approval_type in ["신약", "자료제출의약품"] and detail_link:
+                print(f"      🔗 상세링크 텍스트 스크래핑 진행 중...")
+                efficacy_text = extract_efficacy_text(detail_link)
+
+            res = ask_chatgpt(name, d.get('업체명', ''), d.get('전문/일반구분', ''), ingredient, efficacy_text)
             if res:
                 final_cat = res.get('category')
-                session_cache[ingredient] = final_cat # 다음 행을 위해 기억
+                session_cache[ingredient] = final_cat 
 
-        # [Step 4] 결과 업데이트
+        # 4. 결과 업데이트
         if final_cat:
             try:
                 worksheet.update(range_name=f"J{r_num}", values=[[final_cat]])
             except Exception as e:
                 print(f"      ❌ 시트 쓰기 실패: {e}")
         
-        time.sleep(1) # API 부하 방지용 짧은 휴식
+        time.sleep(1.5) # 스크래핑 및 API 호출 부하 방지
 
     print(">> 모든 분석 및 업데이트 완료!")
 
