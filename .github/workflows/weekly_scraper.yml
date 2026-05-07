@@ -39,4 +39,5 @@ jobs:
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
         run: python ai_analyst.py
