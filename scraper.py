@@ -23,14 +23,20 @@ KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=7) 
 
-# 3. 셀레니움 설정
+# 3. 셀레니움 설정 (가상 서버 최적화 및 타임아웃 방지 적용)
 chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--headless=new")           # 최신 백그라운드 구동 모드
+chrome_options.add_argument("--no-sandbox")              # 권한 차단 해제
+chrome_options.add_argument("--disable-dev-shm-usage")   # 공유 메모리 충돌 방지
+chrome_options.add_argument("--disable-gpu")             # GPU 미사용 설정
+chrome_options.add_argument("--remote-debugging-port=9222")
+chrome_options.add_argument("--disable-extensions")      # 확장 프로그램 비활성화
+chrome_options.add_argument("--blink-settings=imagesEnabled=false") # 이미지 로드 차단 (속도 향상)
 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
+driver.set_page_load_timeout(180)  # 페이지 로드 대기 시간 180초로 연장
 
 def safe_clean(td):
     text = td.get_text(separator=" ", strip=True)
