@@ -6,7 +6,6 @@ from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 
 # 1. 설정
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -23,24 +22,25 @@ KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=7) 
 
-# 3. 셀레니움 설정 (가상 서버 최적화 및 타임아웃 방지 적용)
+# 3. 셀레니움 설정 (방어형 레이턴시 세팅)
 chrome_options = Options()
-chrome_options.add_argument("--headless=new")           # 최신 백그라운드 구동 모드
-chrome_options.add_argument("--no-sandbox")              # 권한 차단 해제
-chrome_options.add_argument("--disable-dev-shm-usage")   # 공유 메모리 충돌 방지
-chrome_options.add_argument("--disable-gpu")             # GPU 미사용 설정
+chrome_options.add_argument("--headless=new")           
+chrome_options.add_argument("--no-sandbox")              
+chrome_options.add_argument("--disable-dev-shm-usage")   
+chrome_options.add_argument("--disable-gpu")             
 chrome_options.add_argument("--remote-debugging-port=9222")
-chrome_options.add_argument("--disable-extensions")      # 확장 프로그램 비활성화
-chrome_options.add_argument("--blink-settings=imagesEnabled=false") # 이미지 로드 차단 (속도 향상)
+chrome_options.add_argument("--disable-extensions")      
+chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
-service = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(service=service, options=chrome_options)
-driver.set_page_load_timeout(180)  # 페이지 로드 대기 시간 180초로 연장
+# 🌟 무한 로딩 방지 핵심 설정
+chrome_options.page_load_strategy = 'eager' 
+
+driver = webdriver.Chrome(options=chrome_options)
+driver.set_page_load_timeout(30) # 🌟 전체 페이지 대기 시간을 120초 -> 30초로 과감하게 축소 (서버 먹통 시 조기 차단)
 
 def safe_clean(td):
     text = td.get_text(separator=" ", strip=True)
-    # 🌟 "제품명"을 지우개 목록에 추가했습니다!
     labels = ["제품명", "업체명", "허가일자", "전문/일반", "취소/취하일자", "분류"]
     for label in labels:
         text = text.replace(label, "").strip()
@@ -50,17 +50,21 @@ def get_api_data(item_seq):
     api_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {"serviceKey": urllib.parse.unquote(mfds_api_key), "item_seq": item_seq, "type": "json"}
     try:
-        res = requests.get(api_url, params=params, timeout=10).json()
+        # 🌟 API 타임아웃 5초로 제한
+        res = requests.get(api_url, params=params, timeout=5).json() 
         return {"ingr": res["body"]["items"][0].get("MAIN_ITEM_INGR", "")}
-    except: return None
+    except: 
+        print(f"      ⚠️ 식약처 API 응답 지연으로 건너뜀 (코드: {item_seq})")
+        return None
 
 def get_detail_info(item_seq):
     url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-    driver.get(url)
-    time.sleep(1.5)
-    soup = BeautifulSoup(driver.page_source, "html.parser")
     mfg, rv_type, detail_ingr = "", "", ""
     try:
+        driver.get(url)
+        time.sleep(1)
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        
         th_mfg = soup.find("th", string=lambda t: t and "위탁제조업체" in t)
         if th_mfg: mfg = th_mfg.find_next_sibling("td").text.strip()
         
@@ -69,19 +73,31 @@ def get_detail_info(item_seq):
         
         th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
         if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").get_text(separator=", ", strip=True)
-    except: pass
+    except Exception as e:
+        print(f"      ⚠️ 상세페이지 로드 실패로 기본 처리 (코드: {item_seq})")
     return mfg, rv_type, detail_ingr
 
 def run_scraper():
-    print(f"=== 🚀 직관적 필터링 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
+    print(f"=== 🚀 방어형 네트워크 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
     search_url = (f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?page=1&limit=100&searchYn=true&sDateGb=date&"
                   f"sYear={today.year}&sMonth={today.month}&sPermitDateStart={start_date.strftime('%Y-%m-%d')}&"
                   f"sPermitDateEnd={today.strftime('%Y-%m-%d')}&btnSearch=")
     
-    driver.get(search_url)
-    time.sleep(7)
-    rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
-    existing_seqs = [str(r.get('품목기준코드', '')) for r in worksheet.get_all_records()]
+    try:
+        driver.get(search_url)
+        time.sleep(5)
+        rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
+    except Exception as e:
+        print(f"❌ 식약처 메인 서버 다운 또는 응답 없음: {e}")
+        driver.quit()
+        return
+
+    existing_seqs = []
+    try:
+        existing_seqs = [str(r.get('품목기준코드', '')) for r in worksheet.get_all_records()]
+    except:
+        print("⚠️ 구글 시트 로드 실패")
+
     count = 0
 
     for row in rows:
@@ -92,36 +108,42 @@ def run_scraper():
         if cancel_date and re.search(r'\d', cancel_date): 
             continue
 
+        # 🌟 루프 내부 전체를 try-except로 감싸 하나가 터져도 다음 약품으로 넘어가게 차단
         try:
             item_seq = re.search(r"(\d{9})", str(cols[1].find("a"))).group(1)
             if item_seq in existing_seqs: continue
             
             product_name = safe_clean(cols[1])
+            
+            # 각각의 호출에서 타임아웃 에러가 나더라도 무너지지 않음
             api = get_api_data(item_seq)
             mfg, rv_type, detail_ingr = get_detail_info(item_seq)
             
             raw_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
+            if not raw_ingr: raw_ingr = "-" # 데이터 공백 방지
             
             clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr)
             clean_ingr = clean_ingr.replace('|', ', ').strip()
             clean_ingr = re.sub(r',\s*,', ',', clean_ingr)
             
-            # 🌟 요약 열이 삭제되어 데이터 칸 수를 11칸으로 맞췄습니다.
             new_row = [
                 item_seq, product_name, clean_ingr, safe_clean(cols[2]), 
                 safe_clean(cols[3]), safe_clean(cols[5]), mfg, rv_type, 
                 f'=HYPERLINK("https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}", "클릭")',
-                "", # J열: AI_분류 (빈칸 대기)
-                today.strftime("%Y-%m-%d %H:%M:%S") # K열: 수집일시
+                "", 
+                today.strftime("%Y-%m-%d %H:%M:%S") 
             ]
             
             worksheet.append_row(new_row, value_input_option='USER_ENTERED')
             existing_seqs.append(item_seq)
             count += 1
             print(f"   ✅ 수집됨: {product_name}")
-        except: continue
+            time.sleep(0.5)
+        except Exception as item_err:
+            print(f"   ⏩ 특정 품목 처리 중 에러 발생(스킵): {item_err}")
+            continue
 
-    print(f"🏁 신규 {count}건 업데이트 완료!")
+    print(f"🏁 신규 {count}건 업데이트 시도 완료!")
     driver.quit()
 
 if __name__ == "__main__":
