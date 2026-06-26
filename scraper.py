@@ -3,8 +3,6 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 import gspread
 from google.oauth2.service_account import Credentials
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 
 # 1. 설정
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -16,39 +14,17 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정 (최근 10일)
+# 2. 날짜 설정 (최근 30일 - 누락분 복구용)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=30) 
 
-# 3. 셀레니움 설정 (식약처 봇 탐지 우회 및 렌더러 충돌 방지)
-chrome_options = Options()
-chrome_options.add_argument("--headless=new")           
-chrome_options.add_argument("--no-sandbox")              
-chrome_options.add_argument("--disable-dev-shm-usage")   
-chrome_options.add_argument("--disable-gpu")             
-chrome_options.add_argument("--remote-debugging-port=9222")
-chrome_options.add_argument("--disable-extensions")      
-chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
-
-# 봇(Bot) 탐지 방어 회피 옵션
-chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-chrome_options.add_experimental_option("useAutomationExtension", False)
-chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-
-driver = webdriver.Chrome(options=chrome_options)
-
-# 브라우저 내부의 'webdriver' 식별자를 강제로 지워 일반 브라우저처럼 위장
-driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-    'source': '''
-        Object.defineProperty(navigator, 'webdriver', {
-          get: () => undefined
-        })
-    '''
-})
-
-driver.set_page_load_timeout(120) 
+# 3. HTTP 헤더 설정 (일반 사용자 위장)
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+}
 
 def safe_clean(td):
     text = td.get_text(separator=" ", strip=True)
@@ -64,16 +40,14 @@ def get_api_data(item_seq):
         res = requests.get(api_url, params=params, timeout=10).json() 
         return {"ingr": res["body"]["items"][0].get("MAIN_ITEM_INGR", "")}
     except: 
-        print(f"      ⚠️ 식약처 API 응답 지연으로 건너뜀 (코드: {item_seq})")
         return None
 
 def get_detail_info(item_seq):
     url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
     mfg, rv_type, detail_ingr = "", "", ""
     try:
-        driver.get(url)
-        time.sleep(1.5)
-        soup = BeautifulSoup(driver.page_source, "html.parser")
+        res = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
         
         th_mfg = soup.find("th", string=lambda t: t and "위탁제조업체" in t)
         if th_mfg: mfg = th_mfg.find_next_sibling("td").text.strip()
@@ -84,22 +58,25 @@ def get_detail_info(item_seq):
         th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
         if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").get_text(separator=", ", strip=True)
     except Exception:
-        print(f"      ⚠️ 상세페이지 로드 실패로 기본 처리 (코드: {item_seq})")
+        pass
     return mfg, rv_type, detail_ingr
 
 def run_scraper():
-    print(f"=== 🚀 안정화 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
+    print(f"=== 🚀 순수 HTTP 기반 데이터 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
     search_url = (f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?page=1&limit=100&searchYn=true&sDateGb=date&"
                   f"sYear={today.year}&sMonth={today.month}&sPermitDateStart={start_date.strftime('%Y-%m-%d')}&"
                   f"sPermitDateEnd={today.strftime('%Y-%m-%d')}&btnSearch=")
     
     try:
-        driver.get(search_url)
-        time.sleep(10) 
-        rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
+        res = requests.get(search_url, headers=headers, timeout=20)
+        soup = BeautifulSoup(res.text, "html.parser")
+        tbody = soup.find("tbody")
+        if not tbody:
+            print("❌ 테이블 요소를 찾지 못했습니다. 식약처 차단 가능성 존재.")
+            return
+        rows = tbody.find_all("tr")
     except Exception as e:
-        print(f"❌ 식약처 메인 서버 다운 또는 응답 없음: {e}")
-        driver.quit()
+        print(f"❌ 데이터 호출 실패: {e}")
         return
 
     existing_seqs = []
@@ -146,13 +123,12 @@ def run_scraper():
             existing_seqs.append(item_seq)
             count += 1
             print(f"   ✅ 수집됨: {product_name}")
-            time.sleep(0.5)
+            time.sleep(1) # 서버 부하 방지용 지연
         except Exception as item_err:
-            print(f"   ⏩ 특정 품목 처리 중 에러 발생(스킵): {item_err}")
+            print(f"   ⏩ 특정 품목 스킵: {item_err}")
             continue
 
-    print(f"🏁 신규 {count}건 업데이트 시도 완료!")
-    driver.quit()
+    print(f"🏁 신규 {count}건 업데이트 완료!")
 
 if __name__ == "__main__":
     run_scraper()
