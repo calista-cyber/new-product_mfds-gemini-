@@ -1,10 +1,10 @@
-name: 연결 테스트 (진단용)
+name: API 테스트 (진단용)
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-connection:
+  test-api:
     runs-on: ubuntu-latest
     steps:
       - name: 파이썬 설정
@@ -13,23 +13,31 @@ jobs:
           python-version: '3.11'
 
       - name: 라이브러리 설치
-        run: pip install requests beautifulsoup4
+        run: pip install requests
 
-      - name: 식약처 페이지 접속 테스트
+      - name: 식약처 OpenAPI 테스트
+        env:
+          MFDS_API_KEY: ${{ secrets.MFDS_API_KEY }}
         run: |
           python << 'EOF'
-          import requests
-          from bs4 import BeautifulSoup
-          url = ("https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro"
-                 "?page=1&limit=100&searchYn=true&sDateGb=date&sYear=2026&sMonth=6&sWeek=4"
-                 "&sPermitDateStart=2026-06-21&sPermitDateEnd=2026-06-27&sItemName=&sEntpName=&btnSearch=")
-          h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+          import os, urllib.parse, requests
+          key = urllib.parse.unquote(os.environ["MFDS_API_KEY"])
+          url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnInq07"
+          params = {"serviceKey": key, "type": "json", "numOfRows": 5, "pageNo": 1}
           try:
-              r = requests.get(url, headers=h, timeout=20)
+              r = requests.get(url, params=params, timeout=20)
               print("STATUS:", r.status_code)
-              print("LENGTH:", len(r.text))
-              tb = BeautifulSoup(r.text, "html.parser").find("tbody")
-              print("ROWS:", len(tb.find_all("tr")) if tb else "NO TBODY")
+              print("HEAD:", r.text[:300])
+              try:
+                  body = r.json()["body"]
+                  print("TOTAL:", body.get("totalCount"))
+                  items = body["items"]
+                  rows = items if isinstance(items, list) else [items]
+                  print("FIELDS:", list(rows[0].keys()))
+                  for it in rows:
+                      print("ROW:", it.get("ITEM_NAME"), "|", it.get("ITEM_PERMIT_DATE"))
+              except Exception as pe:
+                  print("PARSE-ISSUE:", repr(pe))
           except Exception as e:
               print("ERROR:", repr(e))
           EOF
