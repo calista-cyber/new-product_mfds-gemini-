@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import gspread
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 
 # 1. 설정
@@ -17,12 +16,12 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정 (최근 10일로 약간 늘림 - 누락분 커버용)
+# 2. 날짜 설정 (최근 10일)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
 start_date = today - timedelta(days=10) 
 
-# 3. 셀레니움 설정 (충돌 방지 및 타임아웃 롤백)
+# 3. 셀레니움 설정 (식약처 봇 탐지 우회 및 렌더러 충돌 방지)
 chrome_options = Options()
 chrome_options.add_argument("--headless=new")           
 chrome_options.add_argument("--no-sandbox")              
@@ -31,11 +30,25 @@ chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--remote-debugging-port=9222")
 chrome_options.add_argument("--disable-extensions")      
 chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
-chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
-# eager 옵션 삭제 (렌더러 충돌 원인 제거)
+# 봇(Bot) 탐지 방어 회피 옵션
+chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+chrome_options.add_experimental_option("useAutomationExtension", False)
+chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
 driver = webdriver.Chrome(options=chrome_options)
-driver.set_page_load_timeout(120) # 🌟 메인 페이지 로딩을 위해 다시 120초로 넉넉하게 부여
+
+# 브라우저 내부의 'webdriver' 식별자를 강제로 지워 일반 브라우저처럼 위장
+driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+    'source': '''
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined
+        })
+    '''
+})
+
+driver.set_page_load_timeout(120) 
 
 def safe_clean(td):
     text = td.get_text(separator=" ", strip=True)
@@ -70,7 +83,7 @@ def get_detail_info(item_seq):
         
         th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
         if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").get_text(separator=", ", strip=True)
-    except Exception as e:
+    except Exception:
         print(f"      ⚠️ 상세페이지 로드 실패로 기본 처리 (코드: {item_seq})")
     return mfg, rv_type, detail_ingr
 
@@ -82,7 +95,7 @@ def run_scraper():
     
     try:
         driver.get(search_url)
-        time.sleep(10) # 🌟 메인 표가 렌더링될 때까지 충분히 대기합니다 (5초 -> 10초)
+        time.sleep(10) 
         rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
     except Exception as e:
         print(f"❌ 식약처 메인 서버 다운 또는 응답 없음: {e}")
