@@ -1,0 +1,35 @@
+name: 연결 테스트 (진단용)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 라이브러리 설치
+        run: pip install requests beautifulsoup4
+
+      - name: 식약처 페이지 접속 테스트
+        run: |
+          python << 'EOF'
+          import requests
+          from bs4 import BeautifulSoup
+          url = ("https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro"
+                 "?page=1&limit=100&searchYn=true&sDateGb=date&sYear=2026&sMonth=6&sWeek=4"
+                 "&sPermitDateStart=2026-06-21&sPermitDateEnd=2026-06-27&sItemName=&sEntpName=&btnSearch=")
+          h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+          try:
+              r = requests.get(url, headers=h, timeout=20)
+              print("STATUS:", r.status_code)
+              print("LENGTH:", len(r.text))
+              tb = BeautifulSoup(r.text, "html.parser").find("tbody")
+              print("ROWS:", len(tb.find_all("tr")) if tb else "NO TBODY")
+          except Exception as e:
+              print("ERROR:", repr(e))
+          EOF
