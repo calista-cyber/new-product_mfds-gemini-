@@ -19,7 +19,7 @@ worksheet = gc.open_by_key(sheet_id).sheet1
 # 2. 날짜 설정 (최근 10일)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
-start_date = today - timedelta(days=10) 
+start_date = today - timedelta(days=7) 
 
 # 3. 셀레니움 설정 (식약처 봇 탐지 우회 및 렌더러 충돌 방지)
 chrome_options = Options()
