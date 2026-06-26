@@ -17,12 +17,12 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정 (최근 7일)
+# 2. 날짜 설정 (최근 10일로 약간 늘림 - 누락분 커버용)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
-start_date = today - timedelta(days=7) 
+start_date = today - timedelta(days=10) 
 
-# 3. 셀레니움 설정 (방어형 레이턴시 세팅)
+# 3. 셀레니움 설정 (충돌 방지 및 타임아웃 롤백)
 chrome_options = Options()
 chrome_options.add_argument("--headless=new")           
 chrome_options.add_argument("--no-sandbox")              
@@ -33,11 +33,9 @@ chrome_options.add_argument("--disable-extensions")
 chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
-# 🌟 무한 로딩 방지 핵심 설정
-chrome_options.page_load_strategy = 'eager' 
-
+# eager 옵션 삭제 (렌더러 충돌 원인 제거)
 driver = webdriver.Chrome(options=chrome_options)
-driver.set_page_load_timeout(30) # 🌟 전체 페이지 대기 시간을 120초 -> 30초로 과감하게 축소 (서버 먹통 시 조기 차단)
+driver.set_page_load_timeout(120) # 🌟 메인 페이지 로딩을 위해 다시 120초로 넉넉하게 부여
 
 def safe_clean(td):
     text = td.get_text(separator=" ", strip=True)
@@ -50,8 +48,7 @@ def get_api_data(item_seq):
     api_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
     params = {"serviceKey": urllib.parse.unquote(mfds_api_key), "item_seq": item_seq, "type": "json"}
     try:
-        # 🌟 API 타임아웃 5초로 제한
-        res = requests.get(api_url, params=params, timeout=5).json() 
+        res = requests.get(api_url, params=params, timeout=10).json() 
         return {"ingr": res["body"]["items"][0].get("MAIN_ITEM_INGR", "")}
     except: 
         print(f"      ⚠️ 식약처 API 응답 지연으로 건너뜀 (코드: {item_seq})")
@@ -62,7 +59,7 @@ def get_detail_info(item_seq):
     mfg, rv_type, detail_ingr = "", "", ""
     try:
         driver.get(url)
-        time.sleep(1)
+        time.sleep(1.5)
         soup = BeautifulSoup(driver.page_source, "html.parser")
         
         th_mfg = soup.find("th", string=lambda t: t and "위탁제조업체" in t)
@@ -78,14 +75,14 @@ def get_detail_info(item_seq):
     return mfg, rv_type, detail_ingr
 
 def run_scraper():
-    print(f"=== 🚀 방어형 네트워크 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
+    print(f"=== 🚀 안정화 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
     search_url = (f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?page=1&limit=100&searchYn=true&sDateGb=date&"
                   f"sYear={today.year}&sMonth={today.month}&sPermitDateStart={start_date.strftime('%Y-%m-%d')}&"
                   f"sPermitDateEnd={today.strftime('%Y-%m-%d')}&btnSearch=")
     
     try:
         driver.get(search_url)
-        time.sleep(5)
+        time.sleep(10) # 🌟 메인 표가 렌더링될 때까지 충분히 대기합니다 (5초 -> 10초)
         rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
     except Exception as e:
         print(f"❌ 식약처 메인 서버 다운 또는 응답 없음: {e}")
@@ -108,19 +105,17 @@ def run_scraper():
         if cancel_date and re.search(r'\d', cancel_date): 
             continue
 
-        # 🌟 루프 내부 전체를 try-except로 감싸 하나가 터져도 다음 약품으로 넘어가게 차단
         try:
             item_seq = re.search(r"(\d{9})", str(cols[1].find("a"))).group(1)
             if item_seq in existing_seqs: continue
             
             product_name = safe_clean(cols[1])
             
-            # 각각의 호출에서 타임아웃 에러가 나더라도 무너지지 않음
             api = get_api_data(item_seq)
             mfg, rv_type, detail_ingr = get_detail_info(item_seq)
             
             raw_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
-            if not raw_ingr: raw_ingr = "-" # 데이터 공백 방지
+            if not raw_ingr: raw_ingr = "-" 
             
             clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr)
             clean_ingr = clean_ingr.replace('|', ', ').strip()
