@@ -1,10 +1,7 @@
 import os, time, json, requests, urllib.parse, re
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 import gspread
 from google.oauth2.service_account import Credentials
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 
 # 1. 설정
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -16,143 +13,95 @@ credentials = Credentials.from_service_account_info(json.loads(gcp_secret), scop
 gc = gspread.authorize(credentials)
 worksheet = gc.open_by_key(sheet_id).sheet1
 
-# 2. 날짜 설정 (최근 10일)
+# 2. 날짜 설정 (최근 7일 - 주간 자동화 기준)
 KST = timezone(timedelta(hours=9))
 today = datetime.now(KST)
-start_date = today - timedelta(days=7) 
+start_date = today - timedelta(days=7)
+start_date_str = start_date.strftime('%Y%m%d') # API 날짜 비교용 (YYYYMMDD)
 
-# 3. 셀레니움 설정 (식약처 봇 탐지 우회 및 렌더러 충돌 방지)
-chrome_options = Options()
-chrome_options.add_argument("--headless=new")           
-chrome_options.add_argument("--no-sandbox")              
-chrome_options.add_argument("--disable-dev-shm-usage")   
-chrome_options.add_argument("--disable-gpu")             
-chrome_options.add_argument("--remote-debugging-port=9222")
-chrome_options.add_argument("--disable-extensions")      
-chrome_options.add_argument("--blink-settings=imagesEnabled=false") 
-
-# 봇(Bot) 탐지 방어 회피 옵션
-chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-chrome_options.add_experimental_option("useAutomationExtension", False)
-chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-
-driver = webdriver.Chrome(options=chrome_options)
-
-# 브라우저 내부의 'webdriver' 식별자를 강제로 지워 일반 브라우저처럼 위장
-driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-    'source': '''
-        Object.defineProperty(navigator, 'webdriver', {
-          get: () => undefined
-        })
-    '''
-})
-
-driver.set_page_load_timeout(120) 
-
-def safe_clean(td):
-    text = td.get_text(separator=" ", strip=True)
-    labels = ["제품명", "업체명", "허가일자", "전문/일반", "취소/취하일자", "분류"]
-    for label in labels:
-        text = text.replace(label, "").strip()
-    return text
-
-def get_api_data(item_seq):
-    api_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
-    params = {"serviceKey": urllib.parse.unquote(mfds_api_key), "item_seq": item_seq, "type": "json"}
-    try:
-        res = requests.get(api_url, params=params, timeout=10).json() 
-        return {"ingr": res["body"]["items"][0].get("MAIN_ITEM_INGR", "")}
-    except: 
-        print(f"      ⚠️ 식약처 API 응답 지연으로 건너뜀 (코드: {item_seq})")
-        return None
-
-def get_detail_info(item_seq):
-    url = f"https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}"
-    mfg, rv_type, detail_ingr = "", "", ""
-    try:
-        driver.get(url)
-        time.sleep(1.5)
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        
-        th_mfg = soup.find("th", string=lambda t: t and "위탁제조업체" in t)
-        if th_mfg: mfg = th_mfg.find_next_sibling("td").text.strip()
-        
-        th_rv = soup.find("th", string=lambda t: t and "허가심사유형" in t)
-        if th_rv: rv_type = th_rv.find_next_sibling("td").text.strip()
-        
-        th_ingr = soup.find("th", string=lambda t: t and "주성분" in t)
-        if th_ingr: detail_ingr = th_ingr.find_next_sibling("td").get_text(separator=", ", strip=True)
-    except Exception:
-        print(f"      ⚠️ 상세페이지 로드 실패로 기본 처리 (코드: {item_seq})")
-    return mfg, rv_type, detail_ingr
-
-def run_scraper():
-    print(f"=== 🚀 안정화 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
-    search_url = (f"https://nedrug.mfds.go.kr/pbp/CCBAE01/getItemPermitIntro?page=1&limit=100&searchYn=true&sDateGb=date&"
-                  f"sYear={today.year}&sMonth={today.month}&sPermitDateStart={start_date.strftime('%Y-%m-%d')}&"
-                  f"sPermitDateEnd={today.strftime('%Y-%m-%d')}&btnSearch=")
+def run_api_scraper():
+    print(f"=== 🚀 100% API 기반 수집 시작 ({start_date.strftime('%Y-%m-%d')} ~) ===")
     
     try:
-        driver.get(search_url)
-        time.sleep(10) 
-        rows = BeautifulSoup(driver.page_source, "html.parser").find("tbody").find_all("tr")
-    except Exception as e:
-        print(f"❌ 식약처 메인 서버 다운 또는 응답 없음: {e}")
-        driver.quit()
-        return
-
-    existing_seqs = []
-    try:
         existing_seqs = [str(r.get('품목기준코드', '')) for r in worksheet.get_all_records()]
-    except:
+    except Exception:
         print("⚠️ 구글 시트 로드 실패")
+        existing_seqs = []
 
     count = 0
-
-    for row in rows:
-        cols = row.find_all("td")
-        if len(cols) < 6: continue
+    api_url = "http://apis.data.go.kr/1471000/DrugPrdtPrmsnInfoService07/getDrugPrdtPrmsnDtlInq06"
+    
+    # 3. API 호출 (최신 허가 품목 확보를 위해 상위 페이지 탐색)
+    for page in range(1, 6):
+        params = {
+            "serviceKey": urllib.parse.unquote(mfds_api_key),
+            "pageNo": page,
+            "numOfRows": 100,
+            "type": "json"
+        }
         
-        cancel_date = safe_clean(cols[4])
-        if cancel_date and re.search(r'\d', cancel_date): 
-            continue
-
         try:
-            item_seq = re.search(r"(\d{9})", str(cols[1].find("a"))).group(1)
-            if item_seq in existing_seqs: continue
+            res = requests.get(api_url, params=params, timeout=15).json()
+            items = res.get("body", {}).get("items", [])
             
-            product_name = safe_clean(cols[1])
-            
-            api = get_api_data(item_seq)
-            mfg, rv_type, detail_ingr = get_detail_info(item_seq)
-            
-            raw_ingr = api["ingr"] if (api and api["ingr"]) else detail_ingr
-            if not raw_ingr: raw_ingr = "-" 
-            
-            clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr)
-            clean_ingr = clean_ingr.replace('|', ', ').strip()
-            clean_ingr = re.sub(r',\s*,', ',', clean_ingr)
-            
-            new_row = [
-                item_seq, product_name, clean_ingr, safe_clean(cols[2]), 
-                safe_clean(cols[3]), safe_clean(cols[5]), mfg, rv_type, 
-                f'=HYPERLINK("https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}", "클릭")',
-                "", 
-                today.strftime("%Y-%m-%d %H:%M:%S") 
-            ]
-            
-            worksheet.append_row(new_row, value_input_option='USER_ENTERED')
-            existing_seqs.append(item_seq)
-            count += 1
-            print(f"   ✅ 수집됨: {product_name}")
-            time.sleep(0.5)
-        except Exception as item_err:
-            print(f"   ⏩ 특정 품목 처리 중 에러 발생(스킵): {item_err}")
-            continue
+            if not items:
+                break
+                
+            for item in items:
+                permit_date = str(item.get("ITEM_PERMIT_DATE", ""))
+                cancel_date = str(item.get("CANCEL_DATE", ""))
+                
+                # 취소/취하 품목 제외
+                if cancel_date:
+                    continue
+                    
+                # 날짜 필터링 (최근 7일 이내 데이터만 추출)
+                if permit_date < start_date_str:
+                    continue 
+                    
+                item_seq = str(item.get("ITEM_SEQ", ""))
+                if not item_seq or item_seq in existing_seqs:
+                    continue
+                    
+                product_name = item.get("ITEM_NAME", "")
+                entp_name = item.get("ENTP_NAME", "")
+                etc_otc = item.get("ETC_OTC_CODE", "")
+                
+                # 주성분 전처리
+                raw_ingr = item.get("MAIN_ITEM_INGR", "-")
+                clean_ingr = re.sub(r'\[M\d+\]', '', raw_ingr)
+                clean_ingr = clean_ingr.replace('|', ', ').strip()
+                clean_ingr = re.sub(r',\s*,', ',', clean_ingr)
+                
+                # API 구조상 직접 표기되지 않는 상세 웹 전용 필드는 "-" 또는 기본값 처리
+                mfg = item.get("MAKE_MATERIAL_FLAG", "-") 
+                rv_type = "-" 
+                
+                # 날짜 포맷 변경 (YYYYMMDD -> YYYY-MM-DD)
+                if len(permit_date) == 8:
+                    formatted_date = f"{permit_date[:4]}-{permit_date[4:6]}-{permit_date[6:]}"
+                else:
+                    formatted_date = permit_date
+                
+                new_row = [
+                    item_seq, product_name, clean_ingr, entp_name, 
+                    formatted_date, etc_otc, mfg, rv_type, 
+                    f'=HYPERLINK("https://nedrug.mfds.go.kr/pbp/CCBBB01/getItemDetail?itemSeq={item_seq}", "클릭")',
+                    "", # J열: AI_분류 (빈칸 대기)
+                    today.strftime("%Y-%m-%d %H:%M:%S") # K열
+                ]
+                
+                worksheet.append_row(new_row, value_input_option='USER_ENTERED')
+                existing_seqs.append(item_seq)
+                count += 1
+                print(f"   ✅ 수집됨: {product_name}")
+                
+            time.sleep(0.5) # API 호출 제한 방어
+        except Exception as e:
+            print(f"❌ API 호출 에러: {e}")
+            break
 
-    print(f"🏁 신규 {count}건 업데이트 시도 완료!")
-    driver.quit()
+    print(f"🏁 신규 {count}건 업데이트 완료!")
 
 if __name__ == "__main__":
-    run_scraper()
+    run_api_scraper()
